@@ -1,0 +1,3 @@
+.downloads/
+*.backup
+__pycache__/
