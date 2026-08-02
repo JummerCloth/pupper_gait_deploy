@@ -52,18 +52,29 @@ than a silently mis-fed policy.
 ## Exporting a policy (training machine, not the robot)
 
 The Pi cannot convert an mjlab `.pt` checkpoint — that needs a GPU and MuJoCo-Warp.
-Convert on the training machine and hand off through the W&B run:
+The conversion happens on the training machine and is handed off through the W&B run.
+
+**Pupper training does this automatically.** Every checkpoint save also writes and
+uploads `policy.json` to the run, overwriting the previous one, so the run always
+carries a deployable copy of the latest policy — including if the job is preempted
+or killed part way. Nothing needs to be run by hand; go straight to the robot
+section below.
+
+The export folds the observation normalization into the first layer, reverses the
+history frames into the robot's newest-first order, emits the gait reference tables
+for mimic policies, and parity-checks the result against the live actor on real
+observations. A failed parity check skips the upload rather than shipping a bad
+policy, and never interrupts training.
+
+To convert a specific older checkpoint, or to regenerate the parity fixture, run it
+by hand:
 
 ```bash
 uv run export-pupper-policy Mjlab-Trot-Bumpy-Pupper-v3 --wandb-run-path mjlab/pdfzwf3l --upload-wandb
 ```
 
-That folds the observation normalization into the first layer, reverses the history
-frames into the robot's newest-first order, emits the gait reference tables, checks
-parity against the source actor on real observations, and uploads `policy.json` to
-the run. Add `--golden-output test/gait_golden.json` to regenerate the parity
-fixture at the same time, which you must do whenever the reference tables or the
-gait parameters change.
+Add `--golden-output test/gait_golden.json` to regenerate the parity fixture, which
+you must do whenever the reference tables or the gait parameters change.
 
 On the robot:
 

@@ -2,12 +2,15 @@
 """Download an mjlab-exported policy JSON from a W&B run and validate it.
 
 mjlab logs training checkpoints as .pt files, which the Pi cannot convert (that
-needs a GPU and MuJoCo-Warp). The conversion happens on the training machine:
+needs a GPU and MuJoCo-Warp). The conversion happens on the training machine, and
+Pupper runs now do it automatically: every checkpoint save also uploads policy.json
+to the W&B run, overwriting the previous one, so the run always holds a deployable
+copy of the latest policy. This script pulls it back down.
+
+To convert an older checkpoint by hand instead:
 
     uv run export-pupper-policy Mjlab-Trot-Bumpy-Pupper-v3 \
         --wandb-run-path mjlab/pdfzwf3l --upload-wandb
-
-which uploads policy.json to the run's files. This script pulls it back down.
 
     python3 download_policy.py mjlab/pdfzwf3l        # entity/project/run-id
     python3 download_policy.py pdfzwf3l --project mjlab
