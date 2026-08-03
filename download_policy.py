@@ -64,6 +64,18 @@ def resolve_run_path(run: str, project: str | None, entity: str | None) -> str:
   return f"{entity}/{project}/{run_id}"
 
 
+# W&B writes its own JSON into every run's files. Downloading one of those instead
+# of the policy produced a confusing KeyError deep in validation, so they are
+# excluded from the fallback search by name.
+WANDB_INTERNAL_PREFIXES = ("wandb-", "wandb/", "media/", "config.yaml", "requirements")
+
+
+def _is_candidate_policy(name: str) -> bool:
+  if not name.endswith(".json"):
+    return False
+  return not any(name.startswith(p) for p in WANDB_INTERNAL_PREFIXES)
+
+
 def fetch(run_path: str, file_name: str, dest_dir: Path) -> Path:
   """Download ``file_name`` from the run's files, falling back to artifacts."""
   import wandb
@@ -73,7 +85,12 @@ def fetch(run_path: str, file_name: str, dest_dir: Path) -> Path:
   print(f"Run: {run.name} ({run_path})")
 
   names = [f.name for f in run.files()]
-  candidates = [file_name] if file_name in names else [n for n in names if n.endswith(".json")]
+  if file_name in names:
+    candidates = [file_name]
+  else:
+    candidates = sorted(n for n in names if _is_candidate_policy(n))
+    if candidates:
+      print(f"'{file_name}' not found; falling back to: {candidates[0]}")
   if candidates:
     name = candidates[0]
     print(f"Downloading run file: {name}")
@@ -89,14 +106,33 @@ def fetch(run_path: str, file_name: str, dest_dir: Path) -> Path:
         return jsons[0]
 
   raise SystemExit(
-    f"No .json policy found in {run_path}. Export and upload it from the training "
-    "machine first (see this script's docstring)."
+    f"No policy JSON in {run_path} (it has {len(names)} files, none of them a "
+    f"policy).\n\n"
+    "mjlab uploads policy.json when a run ends -- on a normal finish or on "
+    "Ctrl+C. A run that is still training, or that was killed outright "
+    "(SIGKILL, cluster preemption, a crash), never gets that far.\n\n"
+    "Export it by hand from the training machine:\n"
+    f"  uv run export-pupper-policy <TASK-ID> --wandb-run-path {run_path} --upload-wandb"
   )
 
 
 def validate(path: Path) -> dict:
   """Check the deploy contract, and report what the controller will do with it."""
   policy = json.loads(path.read_text())
+
+  # Fail with something readable if this is not a policy at all. Downloading the
+  # wrong file used to surface as a KeyError from the middle of validation, which
+  # says nothing about what actually went wrong.
+  missing = [k for k in ("in_shape", "layers") if k not in policy]
+  if missing:
+    keys = ", ".join(sorted(policy)[:8]) or "(none)"
+    raise SystemExit(
+      f"{path.name} is not an mjlab policy export -- missing {', '.join(missing)}.\n"
+      f"Its top-level keys are: {keys}\n\n"
+      "If this is 'wandb-metadata.json' or similar, the run had no policy.json "
+      "and an unrelated file was picked up. Export the policy from the training "
+      "machine (see this script's docstring), or pass --file to name the right one."
+    )
 
   history = policy.get("observation_history")
   frame = policy.get("single_observation_size", BASE_OBSERVATION_SIZE)
