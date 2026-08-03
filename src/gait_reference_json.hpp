@@ -54,6 +54,10 @@ inline void parse_gait_reference(const Json &block, int n_joints, GaitReference 
   };
   read_table("trot_table", gait.trot_table);
   read_table("gallop_table", gait.gallop_table);
+  // Mixed-gait policies also ship a lift-in-place table; older JSONs don't.
+  if (block.contains("lift_table")) {
+    read_table("lift_table", gait.lift_table);
+  }
 
   if (!gait.valid()) {
     throw std::runtime_error("gait_reference block is not self-consistent");

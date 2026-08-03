@@ -40,11 +40,16 @@ struct GaitReference {
   // joint limits exactly as training clamped them.
   std::vector<double> trot_table;
   std::vector<double> gallop_table;
+  // Optional (mixed-gait policies): played instead of trot when the command is
+  // not translating (|vx| < dir_threshold), i.e. turning or sidestepping. Empty
+  // for older policies, which keep trotting there.
+  std::vector<double> lift_table;
 
   bool valid() const {
     const std::size_t expected = static_cast<std::size_t>(n_samples) * n_joints;
     return n_samples > 0 && n_joints > 0 && frequency > 0.0 && blend_speed > 0.0 &&
-           trot_table.size() == expected && gallop_table.size() == expected;
+           trot_table.size() == expected && gallop_table.size() == expected &&
+           (lift_table.empty() || lift_table.size() == expected);
   }
 };
 
@@ -86,7 +91,8 @@ inline void compute_gait_reference_offset(const GaitReference &gait,
 
   // Forward/backward sets the direction; the turn sign only matters when we are
   // barely translating. A negative direction time-reverses the reference.
-  const double dir_signal = (std::abs(vx) >= gait.dir_threshold) ? vx : yaw;
+  const bool translating = std::abs(vx) >= gait.dir_threshold;
+  const double dir_signal = translating ? vx : yaw;
   const double eff_phase = (dir_signal >= 0.0) ? phase : -phase;
 
   const double pos = eff_phase * gait.n_samples;
@@ -95,7 +101,10 @@ inline void compute_gait_reference_offset(const GaitReference &gait,
   const int i1 = (i0 + 1) % gait.n_samples;
   const double alpha = pos - pos_floor;
 
-  const std::vector<double> &table = galloping ? gait.gallop_table : gait.trot_table;
+  // Mixed-gait policies lift in place instead of trotting when not translating.
+  const std::vector<double> &slow_table =
+      (translating || gait.lift_table.empty()) ? gait.trot_table : gait.lift_table;
+  const std::vector<double> &table = galloping ? gait.gallop_table : slow_table;
 
   // Blend toward the static default pose at low command speed (so a zero command
   // means "stand at the default pose", i.e. an all-zero offset).

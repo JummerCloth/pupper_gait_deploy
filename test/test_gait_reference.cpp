@@ -80,7 +80,8 @@ int main(int argc, char **argv) {
           return 1;
         }
         if (from_policy.trot_table != gait.trot_table ||
-            from_policy.gallop_table != gait.gallop_table) {
+            from_policy.gallop_table != gait.gallop_table ||
+            from_policy.lift_table != gait.lift_table) {
           std::fprintf(stderr, "FAIL: %s tables differ from the golden tables\n",
                        policy_path.c_str());
           return 1;
@@ -175,11 +176,33 @@ int main(int argc, char **argv) {
     failures++;
   }
 
+  // Mixed-gait policies: a pure turn must play the lift table, not the trot.
+  // Compare against the same gait with the lift table dropped (the legacy path).
+  int property_checks = 3;
+  if (!gait.lift_table.empty()) {
+    property_checks++;
+    neural_controller::GaitReference no_lift = gait;
+    no_lift.lift_table.clear();
+    std::vector<float> lifted(gait.n_joints), trotted(gait.n_joints);
+    neural_controller::compute_gait_reference_offset(gait, default_joint_pos, 0.4, 0.0, 0.0,
+                                                     0.9, lifted.data());
+    neural_controller::compute_gait_reference_offset(no_lift, default_joint_pos, 0.4, 0.0,
+                                                     0.0, 0.9, trotted.data());
+    differs = false;
+    for (int i = 0; i < gait.n_joints; i++) {
+      differs = differs || std::abs(lifted[i] - trotted[i]) > 1e-3f;
+    }
+    if (!differs) {
+      std::fprintf(stderr, "FAIL: turning ignored the lift table\n");
+      failures++;
+    }
+  }
+
   if (failures > 0) {
     std::fprintf(stderr, "\n%d check(s) FAILED\n", failures);
     return 1;
   }
-  std::printf("OK: %d golden cases matched (worst max_abs_err = %.3e) + 3 property checks\n",
-              n_cases, worst);
+  std::printf("OK: %d golden cases matched (worst max_abs_err = %.3e) + %d property checks\n",
+              n_cases, worst, property_checks);
   return 0;
 }

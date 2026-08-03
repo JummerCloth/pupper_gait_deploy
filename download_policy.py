@@ -167,7 +167,12 @@ def validate(path: Path) -> dict:
         f"expected {BASE_OBSERVATION_SIZE + ACTION_SIZE}"
       )
     n = gait.get("n_samples", 0)
-    for table in ("trot_table", "gallop_table"):
+    # lift_table is optional: mixed-gait policies ship it (lift-in-place while
+    # turning); older trot/gallop policies don't and keep trotting there.
+    tables = ["trot_table", "gallop_table"]
+    if "lift_table" in gait:
+      tables.append("lift_table")
+    for table in tables:
       rows = gait.get(table, [])
       if len(rows) != n or any(len(r) != ACTION_SIZE for r in rows):
         problems.append(f"{table} is not {n}x{ACTION_SIZE}")
@@ -181,9 +186,15 @@ def validate(path: Path) -> dict:
   print(f"  action scale:        {policy.get('action_scale')}")
   if gait:
     print(f"  gait tables:         {gait['n_samples']} phase samples, {gait['frequency']:.3f} Hz")
-    print(
-      f"  gallop:              {gait['gallop_freq_mult']}x cadence above |vx| = {gait['gallop_speed']}"
-    )
+    if "lift_table" in gait:
+      print(
+        f"  mixed gaits:         trot -> reach above |vx| = {gait['gallop_speed']}, "
+        "lift-in-place when turning"
+      )
+    else:
+      print(
+        f"  gallop:              {gait['gallop_freq_mult']}x cadence above |vx| = {gait['gallop_speed']}"
+      )
     print(f"  blend speed:         {gait['blend_speed']}")
 
   if problems:
