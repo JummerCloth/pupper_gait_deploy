@@ -3,9 +3,10 @@
 
 mjlab logs training checkpoints as .pt files, which the Pi cannot convert (that
 needs a GPU and MuJoCo-Warp). The conversion happens on the training machine, and
-Pupper runs now do it automatically: every checkpoint save also uploads policy.json
-to the W&B run, overwriting the previous one, so the run always holds a deployable
-copy of the latest policy. This script pulls it back down.
+Pupper runs now do it automatically: when a run ends -- on a normal finish or on
+Ctrl+C -- policy.json is uploaded to the W&B run's Files. This script pulls it back
+down. A run that was killed outright (SIGKILL, preemption) leaves no JSON and needs
+a manual export against its last checkpoint.
 
 To convert an older checkpoint by hand instead:
 

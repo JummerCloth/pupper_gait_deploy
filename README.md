@@ -8,8 +8,67 @@ the files, `install.py` copies them into `pupperv3-monorepo` and rebuilds, and
 ```bash
 # on the robot
 git clone <this repo> ~/pupper_gait_deploy && cd ~/pupper_gait_deploy
-./deploy.sh                  # pull, install, rebuild, launch
+./deploy.sh mjlab/<run-id>   # download that run's policy, install, rebuild, launch
 # then press L1 on the joystick to activate the mimic controller
+```
+
+## Loading a policy from a training run
+
+Pupper training uploads the deploy JSON to its W&B run's **Files**, under the
+stable name `policy.json`, when the run ends — both on a normal finish and when
+you stop it with Ctrl+C. There is no export step to run by hand and no iteration
+number to pick, so pointing the robot at a run id is the whole workflow:
+
+```bash
+./deploy.sh mjlab/abc123xy          # download + install + rebuild + launch
+python3 download_policy.py mjlab/abc123xy   # download and validate only
+```
+
+The run id is the last path component of the W&B run URL. `download_policy.py`
+accepts `entity/project/run-id`, `project/run-id`, or a bare `run-id` with
+`--project`, and writes `mimic_policy.json` in this repo.
+
+It validates before anything is installed, because every one of these is silent on
+hardware right up until the legs move:
+
+- `observation_history × single_observation_size` equals the policy's input shape
+- 12 actions out, and `default_joint_pos` / joint limits are 12 long
+- `gait_reference` joint names match the controller config's joint order
+- the reference tables are `n_samples × 12`
+- a 48-dim frame has a `gait_reference` block, and a 36-dim frame does not
+
+It also prints what the controller will do with the policy — frame size and whether
+it is a mimic or plain-proprio policy, kp/kd, action scale, and for mimic policies
+the gait cadence, gallop threshold, and blend speed. Worth a glance: the gallop
+threshold in particular tells you which policy you actually have. A trot-only
+policy ships a very large `gallop_speed` so the branch never fires, whereas a
+trot/gallop policy shows the real switch speed.
+
+If a run was killed outright rather than interrupted — `SIGKILL`, a node failure,
+a cluster preemption — no JSON was written, because those do not reach the training
+loop the way Ctrl+C does. Export that run's last checkpoint by hand from the
+training machine:
+
+```bash
+uv run export-pupper-policy Mjlab-TrotGallop-Flat-Pupper-v3 --wandb-run-path mjlab/<run-id> --upload-wandb
+```
+
+Retraining does not require re-running `install.py` unless the controller sources
+changed — a new policy is just a new JSON:
+
+```bash
+python3 download_policy.py mjlab/<new-run-id>   # refresh mimic_policy.json
+python3 install.py                              # copy into the monorepo + rebuild
+```
+
+To pin an older checkpoint instead of the latest, convert it on the training
+machine and upload under a different name, then pass `--file`:
+
+```bash
+# training machine
+uv run export-pupper-policy Mjlab-TrotGallop-Flat-Pupper-v3 --wandb-run-path mjlab/<run-id> --output policy_iter9000.json --upload-wandb
+# robot
+python3 download_policy.py mjlab/<run-id> --file policy_iter9000.json
 ```
 
 ## Why the controller needed changing
