@@ -386,7 +386,10 @@ teleop_twist_joy_node:
       x: 1
       y: 0
     scale_linear:
-      x: 0.75
+      # Full stick = 1.25 m/s: the mixed-gaits band (trot 0-0.5, reach 0.5-1.25).
+      # The reach onset itself comes from the policy JSON's gallop_speed, so the
+      # stick position where the gait switches is 0.5/1.25 = 40% deflection.
+      x: 1.25
       y: 0.5
 
 
