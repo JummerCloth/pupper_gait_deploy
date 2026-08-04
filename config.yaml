@@ -386,10 +386,12 @@ teleop_twist_joy_node:
       x: 1
       y: 0
     scale_linear:
-      # Full stick = 1.25 m/s: the mixed-gaits band (trot 0-0.5, reach 0.5-1.25).
-      # The reach onset itself comes from the policy JSON's gallop_speed, so the
-      # stick position where the gait switches is 0.5/1.25 = 40% deflection.
-      x: 1.25
+      # Full stick = 1.0 m/s: what the current mixed-gaits checkpoint actually
+      # trained on. Training commands run to 1.25 for headroom, but deployed
+      # commands are capped at 1.0; raise this once a checkpoint trained on the
+      # full band is deployed. The trot-to-reach switch comes from the policy
+      # JSON's gallop_speed (0.5), i.e. half stick.
+      x: 1.0
       y: 0.5
 
 
