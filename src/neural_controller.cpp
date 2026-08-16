@@ -1,6 +1,7 @@
 #include "neural_controller/neural_controller.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -161,6 +162,33 @@ controller_interface::CallbackReturn NeuralController::on_init() {
       return controller_interface::CallbackReturn::ERROR;
     }
 
+    // Heading hold: mirror of mjlab's command-side loop, parameters stamped by
+    // the exporter into the "heading_hold" block. Default ON for gait policies
+    // (validated on frozen policies -- the correction needs no retraining), so
+    // pre-heading-hold checkpoints get it too; the block overrides, and
+    // kp <= 0 disables. Needs the IMU for an absolute yaw.
+    if (use_gait_reference_) {
+      heading_hold_kp_ = 1.0;
+    }
+    if (j.find("heading_hold") != j.end()) {
+      const auto &hh = j["heading_hold"];
+      heading_hold_kp_ = hh.value("kp", heading_hold_kp_);
+      heading_hold_clip_ = hh.value("clip", heading_hold_clip_);
+      heading_hold_yaw_threshold_ = hh.value("yaw_threshold", heading_hold_yaw_threshold_);
+      heading_hold_walk_threshold_ = hh.value("walk_threshold", heading_hold_walk_threshold_);
+    }
+    if (heading_hold_kp_ > 0.0 && !params_.use_imu) {
+      RCLCPP_WARN(get_node()->get_logger(),
+                  "heading hold requires use_imu for an absolute yaw; disabling");
+      heading_hold_kp_ = 0.0;
+    }
+    if (heading_hold_kp_ > 0.0) {
+      RCLCPP_INFO(get_node()->get_logger(),
+                  "Heading hold: kp=%.2f clip=%.2f yaw_threshold=%.2f walk_threshold=%.2f",
+                  heading_hold_kp_, heading_hold_clip_, heading_hold_yaw_threshold_,
+                  heading_hold_walk_threshold_);
+    }
+
     // Check that the observation history is consistent with the model input shape
     if (j["in_shape"].at(1) != params_.observation_history * single_observation_size_) {
       RCLCPP_ERROR(get_node()->get_logger(),
@@ -244,6 +272,10 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   cmd_x_vel_ = 0.0;
   cmd_y_vel_ = 0.0;
   cmd_yaw_vel_ = 0.0;
+
+  // Re-arm the heading hold; the target recaptures on the next quiet edge.
+  hh_target_ = 0.0;
+  hh_prev_active_ = false;
 
   // Initialize the observation vector
   observation_.assign(params_.observation_history * single_observation_size_, 0.0);
@@ -500,6 +532,34 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       return controller_interface::return_type::OK;
     }
 
+    // Heading hold: while walking with a quiet commanded yaw, replace the yaw
+    // command with a clipped P correction toward the IMU heading captured when
+    // the yaw went quiet. Mirrors mjlab's UniformVelocityCommand emission path,
+    // so the policy sees the closed-loop command profile it trained on. The
+    // shaped yaw feeds both the observation and the gait reference; the raw
+    // cmd_yaw_vel_ is kept so a commanded turn disengages cleanly.
+    double cmd_yaw_eff = cmd_yaw_vel_;
+    if (heading_hold_kp_ > 0.0) {
+      double roll, pitch, yaw_measured;
+      m.getRPY(roll, pitch, yaw_measured);
+      const bool active =
+          std::abs(cmd_yaw_vel_) < heading_hold_yaw_threshold_ &&
+          std::sqrt(cmd_x_vel_ * cmd_x_vel_ + cmd_y_vel_ * cmd_y_vel_) >
+              heading_hold_walk_threshold_;
+      if (active && !hh_prev_active_) {
+        hh_target_ = yaw_measured;
+      }
+      hh_prev_active_ = active;
+      if (active) {
+        // std::remainder wraps to [-pi, pi]; min/max rather than std::clamp so
+        // this file keeps compiling if RTNeural's CMake drops the package to
+        // C++14 (same reasoning as gait_reference.hpp).
+        const double err = std::remainder(hh_target_ - yaw_measured, 2.0 * M_PI);
+        cmd_yaw_eff = std::min(std::max(err * heading_hold_kp_, -heading_hold_clip_),
+                               heading_hold_clip_);
+      }
+    }
+
     // Fill the observation vector
     // Angular velocity
     observation_.at(0) = (float)ang_vel_x;
@@ -509,10 +569,10 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     observation_.at(3) = (float)projected_gravity_vector[0];
     observation_.at(4) = (float)projected_gravity_vector[1];
     observation_.at(5) = (float)projected_gravity_vector[2];
-    // Velocity commands
+    // Velocity commands (yaw after the heading hold above)
     observation_.at(6) = (float)cmd_x_vel_;
     observation_.at(7) = (float)cmd_y_vel_;
-    observation_.at(8) = (float)cmd_yaw_vel_;
+    observation_.at(8) = (float)cmd_yaw_eff;
     // Orientation commands
     observation_.at(9) = (float)desired_world_z_in_body_frame_.getX();
     observation_.at(10) = (float)desired_world_z_in_body_frame_.getY();
@@ -538,8 +598,11 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       // in double. Wall clock rather than a step count, because the controller runs
       // at 52 Hz against a policy trained at 50 Hz and it is the physical cadence of
       // the foot trajectory that has to be right.
+      // The shaped (heading-hold) yaw, matching what the observation carries:
+      // training computes the reference from the emitted command, so the two
+      // must see the same yaw here too.
       compute_gait_reference_offset(gait_, params_.default_joint_pos, time_since_fade_in,
-                                    cmd_x_vel_, cmd_y_vel_, cmd_yaw_vel_,
+                                    cmd_x_vel_, cmd_y_vel_, cmd_yaw_eff,
                                     observation_.data() + kGaitReferenceIdx);
     }
   } catch (const std::out_of_range &e) {

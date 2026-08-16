@@ -97,6 +97,18 @@ could not even load. The changes here:
   `single_observation_size` (absent ⇒ 36, so **every existing policy keeps loading
   unchanged**), the `gait_reference` block is parsed at load, and the reference is
   written into the newest frame before each inference.
+
+  The controller also runs an **IMU heading hold**, mirroring mjlab's
+  command-side loop (the same correction the G1 deploy stack uses): while
+  walking with a quiet commanded yaw (|yaw| < 0.1 rad/s, linear command norm >
+  0.05 m/s), the yaw command fed to the policy and the gait reference is
+  replaced by `clip(kp * heading_error, ±0.3)` toward the IMU heading captured
+  when the yaw went quiet. A commanded turn or a stop disengages and re-arms
+  it. Default **on** for gait policies (a frozen yaw-rate-tracking policy
+  needs no retraining); a `heading_hold` block in the policy JSON — stamped by
+  mjlab's exporter for runs that trained with the closed loop — overrides the
+  parameters, and `"kp": 0` disables. Plain 36-dim policies are untouched
+  unless their JSON asks for it.
 - **`config.yaml` / `launch.py`** — register a separate `neural_controller_mimic`
   instance of the same plugin, on joystick button L1. The four existing modes
   (walk / three-legged / parkour / test) are untouched. Both files start from lab

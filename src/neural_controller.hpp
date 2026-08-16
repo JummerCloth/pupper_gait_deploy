@@ -90,6 +90,21 @@ class NeuralController : public controller_interface::ControllerInterface {
   GaitReference gait_;
   bool use_gait_reference_ = false;
 
+  // Heading hold: deploy mirror of mjlab's command-side loop (the policies
+  // train on the same closed-loop command profile). While walking with a quiet
+  // commanded yaw, the yaw command fed to the policy (and the gait reference)
+  // is replaced by a clipped P correction toward the IMU heading captured when
+  // the yaw went quiet; a commanded turn or a stop disengages and re-arms.
+  // Parameters come from the policy JSON's "heading_hold" block, stamped by
+  // mjlab's exporter -- keep defaults in sync with
+  // UniformVelocityCommandCfg's. kp <= 0 disables.
+  double heading_hold_kp_ = 0.0;
+  double heading_hold_clip_ = 0.3;
+  double heading_hold_yaw_threshold_ = 0.1;
+  double heading_hold_walk_threshold_ = 0.05;
+  double hh_target_ = 0.0;
+  bool hh_prev_active_ = false;
+
   std::shared_ptr<RTNeural::Model<float>> model_;
 
   std::shared_ptr<ParamListener> param_listener_;
