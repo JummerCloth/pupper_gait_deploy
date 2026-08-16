@@ -44,12 +44,18 @@ struct GaitReference {
   // not translating (|vx| < dir_threshold), i.e. turning or sidestepping. Empty
   // for older policies, which keep trotting there.
   std::vector<double> lift_table;
+  // Optional (direction-split fast gaits): played instead of gallop_table for
+  // backward-fast commands. Ships pre-reversed by the exporter, so the shared
+  // backward phase reversal below plays the recording forward as captured.
+  // Empty for older policies, which time-reverse the single fast table.
+  std::vector<double> gallop_back_table;
 
   bool valid() const {
     const std::size_t expected = static_cast<std::size_t>(n_samples) * n_joints;
     return n_samples > 0 && n_joints > 0 && frequency > 0.0 && blend_speed > 0.0 &&
            trot_table.size() == expected && gallop_table.size() == expected &&
-           (lift_table.empty() || lift_table.size() == expected);
+           (lift_table.empty() || lift_table.size() == expected) &&
+           (gallop_back_table.empty() || gallop_back_table.size() == expected);
   }
 };
 
@@ -101,10 +107,15 @@ inline void compute_gait_reference_offset(const GaitReference &gait,
   const int i1 = (i0 + 1) % gait.n_samples;
   const double alpha = pos - pos_floor;
 
-  // Mixed-gait policies lift in place instead of trotting when not translating.
+  // Mixed-gait policies lift in place instead of trotting when not translating,
+  // and a direction-split fast gait plays its own backward capture rather than
+  // the forward table time-reversed.
   const std::vector<double> &slow_table =
       (translating || gait.lift_table.empty()) ? gait.trot_table : gait.lift_table;
-  const std::vector<double> &table = galloping ? gait.gallop_table : slow_table;
+  const std::vector<double> &fast_table =
+      (dir_signal >= 0.0 || gait.gallop_back_table.empty()) ? gait.gallop_table
+                                                            : gait.gallop_back_table;
+  const std::vector<double> &table = galloping ? fast_table : slow_table;
 
   // Blend toward the static default pose at low command speed (so a zero command
   // means "stand at the default pose", i.e. an all-zero offset).

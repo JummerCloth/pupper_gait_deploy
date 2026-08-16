@@ -58,6 +58,11 @@ inline void parse_gait_reference(const Json &block, int n_joints, GaitReference 
   if (block.contains("lift_table")) {
     read_table("lift_table", gait.lift_table);
   }
+  // Direction-split fast gaits ship a separate backward capture; older JSONs
+  // time-reverse the single fast table instead.
+  if (block.contains("gallop_back_table")) {
+    read_table("gallop_back_table", gait.gallop_back_table);
+  }
 
   if (!gait.valid()) {
     throw std::runtime_error("gait_reference block is not self-consistent");
