@@ -170,8 +170,9 @@ def validate(path: Path) -> dict:
     # lift_table is optional: mixed-gait policies ship it (lift-in-place while
     # turning); older trot/gallop policies don't and keep trotting there.
     tables = ["trot_table", "gallop_table"]
-    if "lift_table" in gait:
-      tables.append("lift_table")
+    for optional in ("lift_table", "gallop_back_table"):
+      if optional in gait:
+        tables.append(optional)
     for table in tables:
       rows = gait.get(table, [])
       if len(rows) != n or any(len(r) != ACTION_SIZE for r in rows):
@@ -187,9 +188,10 @@ def validate(path: Path) -> dict:
   if gait:
     print(f"  gait tables:         {gait['n_samples']} phase samples, {gait['frequency']:.3f} Hz")
     if "lift_table" in gait:
+      split = "direction-split fast tables" if "gallop_back_table" in gait else "one fast table (time-reversed backward)"
       print(
-        f"  mixed gaits:         trot -> reach above |vx| = {gait['gallop_speed']}, "
-        "lift-in-place when turning"
+        f"  mixed gaits:         trot -> fast above |vx| = {gait['gallop_speed']}, "
+        f"lift-in-place when turning, {split}"
       )
     else:
       print(

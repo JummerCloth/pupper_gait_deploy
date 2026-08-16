@@ -81,7 +81,8 @@ int main(int argc, char **argv) {
         }
         if (from_policy.trot_table != gait.trot_table ||
             from_policy.gallop_table != gait.gallop_table ||
-            from_policy.lift_table != gait.lift_table) {
+            from_policy.lift_table != gait.lift_table ||
+            from_policy.gallop_back_table != gait.gallop_back_table) {
           std::fprintf(stderr, "FAIL: %s tables differ from the golden tables\n",
                        policy_path.c_str());
           return 1;
