@@ -49,6 +49,11 @@ def file_mappings(monorepo: Path) -> list[tuple[Path, Path, str]]:
       "Neural controller source (parses gait_reference, fills the frame)",
     ),
     (
+      REPO / "src" / "neural_controller_parameters.yaml",
+      pkg / "src" / "neural_controller_parameters.yaml",
+      "Controller parameter declarations (adds kp_scale)",
+    ),
+    (
       REPO / "src" / "CMakeLists.txt",
       pkg / "CMakeLists.txt",
       "Package CMakeLists (adds the gait parity test)",

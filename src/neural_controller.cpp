@@ -25,6 +25,7 @@ bool NeuralController::check_param_vector_size() {
       {"action_types", params_.action_types.size()},
       {"kps", params_.kps.size()},
       {"kds", params_.kds.size()},
+      {"kp_scale", params_.kp_scale.size()},
       {"init_kps", params_.init_kps.size()},
       {"init_kds", params_.init_kds.size()},
       {"default_joint_pos", params_.default_joint_pos.size()},
@@ -54,6 +55,23 @@ controller_interface::CallbackReturn NeuralController::on_init() {
     if (params_.gain_multiplier != 1.0) {
       RCLCPP_WARN(get_node()->get_logger(), "Gain_multiplier is set to %f",
                   params_.gain_multiplier);
+    }
+
+    // Per-joint kp trim, for hardware variation between individual robots -- a
+    // motor that is weak relative to the rest needs a stiffer loop to track the
+    // same command. This multiplies the kp the policy asks for, rather than
+    // replacing it, because the policy JSON stamps kp as a single scalar over
+    // all twelve joints (see set_param_from_json_scalar below), so it would
+    // overwrite anything per-joint set in kps. Left out of a config entirely,
+    // it means "no trim".
+    if (params_.kp_scale.empty()) {
+      params_.kp_scale.assign(kActionSize, 1.0);
+    }
+    for (const auto &scale : params_.kp_scale) {
+      if (scale < 0.0) {
+        RCLCPP_ERROR(get_node()->get_logger(), "kp_scale entries must be >= 0.0. Stopping");
+        return controller_interface::CallbackReturn::ERROR;
+      }
     }
 
     std::ifstream json_stream(params_.model_path, std::ifstream::binary);
@@ -205,6 +223,20 @@ controller_interface::CallbackReturn NeuralController::on_init() {
 
   if (!check_param_vector_size()) {
     return controller_interface::CallbackReturn::ERROR;
+  }
+
+  // Report any trimmed joint once kp is final (the JSON has been read by now), so
+  // the effective gain of a hand-tuned joint shows up in the startup log rather
+  // than staying buried in a config. Worth checking against the joint's kp_max in
+  // the robot description: the hardware interface clamps to it, so a large trim
+  // can quietly deliver less than it asks for.
+  for (int i = 0; i < kActionSize; i++) {
+    if (params_.kp_scale.at(i) != 1.0) {
+      RCLCPP_WARN(get_node()->get_logger(), "kp_scale for %s is %.2f: kp %.2f -> %.2f",
+                  params_.joint_names.at(i).c_str(), params_.kp_scale.at(i),
+                  params_.kps.at(i) * params_.gain_multiplier,
+                  params_.kps.at(i) * params_.gain_multiplier * params_.kp_scale.at(i));
+    }
   }
 
   return controller_interface::CallbackReturn::SUCCESS;
@@ -729,7 +761,8 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     }
 
     // Send the action to the hardware interface
-    // Multiply by the gain multiplier to scale the gains to account for real2sim gap
+    // Multiply by the gain multiplier to scale the gains to account for real2sim gap,
+    // and by the per-joint kp_scale to compensate for this robot's motors
     command_interfaces_map_.at(params_.joint_names.at(i))
         .at(params_.action_types.at(i))
         .get()
@@ -737,7 +770,7 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     command_interfaces_map_.at(params_.joint_names.at(i))
         .at("kp")
         .get()
-        .set_value(params_.kps.at(i) * params_.gain_multiplier);
+        .set_value(params_.kps.at(i) * params_.gain_multiplier * params_.kp_scale.at(i));
     command_interfaces_map_.at(params_.joint_names.at(i))
         .at("kd")
         .get()

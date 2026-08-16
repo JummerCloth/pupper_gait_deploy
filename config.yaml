@@ -76,6 +76,18 @@ neural_controller:
 
 
     init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Three motors on this robot are weak relative to the rest, so they run stiffer
+    # to track the same command: leg_front_l_2 (index 4), leg_front_l_3 (index 5)
+    # and leg_back_r_3 (index 8), each scaled by 1.2 on this policy's kp of 5.0 for
+    # an effective gain of 6.0. leg_back_r_3 was at 1.5 (7.5) and was too stiff.
+    # Per-joint trim on top of the policy's kp -- the policy JSON stamps kp as one
+    # scalar for all twelve joints, so this cannot be expressed by editing kps here,
+    # and gain_multiplier would hit kd and every other joint too. The scale is
+    # relative, so it targets 6.0 only for a policy whose kp is 5.0 -- retune
+    # whenever the checkpoint's kp changes.
+    kp_scale: [1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0]
     init_kds:
       [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
@@ -138,6 +150,10 @@ neural_controller_three_legged:
 
 
     init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Weak leg_front_l_2, leg_front_l_3 and leg_back_r_3; see neural_controller above.
+    kp_scale: [1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0]
     init_kds:
       [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
@@ -200,6 +216,10 @@ neural_controller_parkour:
 
 
     init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Weak leg_front_l_2, leg_front_l_3 and leg_back_r_3; see neural_controller above.
+    kp_scale: [1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0]
     init_kds:
       [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
@@ -262,6 +282,10 @@ neural_controller_test:
 
 
     init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Weak leg_front_l_2, leg_front_l_3 and leg_back_r_3; see neural_controller above.
+    kp_scale: [1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0]
     init_kds:
       [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
@@ -330,6 +354,12 @@ neural_controller_mimic:
 
 
     init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Weak leg_front_l_2, leg_front_l_3 and leg_back_r_3; see neural_controller
+    # above. This policy's kp is 5.5 rather than 5.0, so the scale differs to hit 6.0.
+    kp_scale:
+      [1.0, 1.0, 1.0, 1.0, 1.0909, 1.0909, 1.0, 1.0, 1.0909, 1.0, 1.0, 1.0]
     init_kds:
       [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
