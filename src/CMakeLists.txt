@@ -89,6 +89,13 @@ if(BUILD_TESTING)
     add_test(NAME gait_reference_parity COMMAND test_gait_reference
       ${CMAKE_CURRENT_SOURCE_DIR}/test/gait_golden.json
       ${CMAKE_CURRENT_SOURCE_DIR}/launch/mimic_policy.json)
+    # Same binary, jump fixture: the test dispatches on which reference block
+    # the fixture carries.
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/jump_golden.json)
+      add_test(NAME jump_reference_parity COMMAND test_gait_reference
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/jump_golden.json
+        ${CMAKE_CURRENT_SOURCE_DIR}/launch/jump_policy.json)
+    endif()
   endif()
 endif()
 

@@ -69,6 +69,11 @@ def file_mappings(monorepo: Path) -> list[tuple[Path, Path, str]]:
       "Gait parity golden data (generated from the trained env)",
     ),
     (
+      REPO / "test" / "jump_golden.json",
+      pkg / "test" / "jump_golden.json",
+      "Jump parity golden data (generated from the trained env)",
+    ),
+    (
       REPO / "config.yaml",
       launch / "config.yaml",
       "Controller config (adds neural_controller_mimic)",
