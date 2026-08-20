@@ -155,6 +155,13 @@ controller_interface::CallbackReturn NeuralController::on_init() {
 
     // Gait reference tables, if this is a motion-reference ("mimic") policy.
     use_gait_reference_ = j.find("gait_reference") != j.end();
+    use_jump_reference_ = j.find("jump_reference") != j.end();
+    if (use_gait_reference_ && use_jump_reference_) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "JSON has both gait_reference and jump_reference blocks; the reference "
+                   "slot can only carry one");
+      return controller_interface::CallbackReturn::ERROR;
+    }
     if (use_gait_reference_) {
       // Throws (and is caught below) if the block is malformed.
       parse_gait_reference(j["gait_reference"], kActionSize, gait_);
@@ -172,10 +179,23 @@ controller_interface::CallbackReturn NeuralController::on_init() {
                   "blend_speed=%.3f",
                   gait_.n_samples, gait_.frequency, gait_.gallop_freq_mult, gait_.gallop_speed,
                   gait_.blend_speed);
+    } else if (use_jump_reference_) {
+      parse_jump_reference(j["jump_reference"], kActionSize, jump_);
+      if (single_observation_size_ != kGaitObservationSize) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "jump_reference present but single_observation_size (%d) != %d",
+                     single_observation_size_, kGaitObservationSize);
+        return controller_interface::CallbackReturn::ERROR;
+      }
+      RCLCPP_INFO(get_node()->get_logger(),
+                  "Jump reference: %d phase samples, %.3f Hz once triggered, %.2f s crouch "
+                  "hold, trigger on joy button %d. The robot holds the crouch until then.",
+                  jump_.n_samples, jump_.frequency, jump_.crouch_hold_s, jump_.trigger_button);
     } else if (single_observation_size_ != kBaseObservationSize) {
       RCLCPP_ERROR(get_node()->get_logger(),
-                   "single_observation_size is %d but the JSON has no gait_reference block; the "
-                   "controller cannot fill the extra observation dimensions",
+                   "single_observation_size is %d but the JSON has no gait_reference or "
+                   "jump_reference block; the controller cannot fill the extra observation "
+                   "dimensions",
                    single_observation_size_);
       return controller_interface::CallbackReturn::ERROR;
     }
@@ -309,6 +329,11 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   hh_target_ = 0.0;
   hh_prev_active_ = false;
 
+  // Disarm the jump clock; the robot holds the crouch until the next trigger.
+  jump_trigger_time_ = -1.0;
+  jump_button_prev_ = false;
+  rt_joy_ptr_ = realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Joy>>(nullptr);
+
   // Initialize the observation vector
   observation_.assign(params_.observation_history * single_observation_size_, 0.0);
 
@@ -337,6 +362,16 @@ controller_interface::CallbackReturn NeuralController::on_activate(
         estop_active_ = true;
         RCLCPP_INFO(get_node()->get_logger(), "Emergency stop triggered");
       });
+
+  // Gamepad, for the jump trigger (R2 by default). Only wired up for jump
+  // policies so gait/velocity policies are untouched by joystick chatter.
+  if (use_jump_reference_) {
+    joy_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::Joy>(
+        "/joy", rclcpp::SystemDefaultsQoS(),
+        [this](const sensor_msgs::msg::Joy::SharedPtr msg) {
+          rt_joy_ptr_.writeFromNonRT(msg);
+        });
+  }
 
   // emergency_stop_reset_subscriber_ = get_node()->create_subscription<std_msgs::msg::Empty>(
   //     "/emergency_stop_reset", rclcpp::SystemDefaultsQoS(),
@@ -635,6 +670,32 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       // must see the same yaw here too.
       compute_gait_reference_offset(gait_, params_.default_joint_pos, time_since_fade_in,
                                     cmd_x_vel_, cmd_y_vel_, cmd_yaw_eff,
+                                    observation_.data() + kGaitReferenceIdx);
+    } else if (use_jump_reference_) {
+      // Rising edge on the trigger button arms the one-shot clock. Accepted only
+      // when no cycle is in flight: the previous jump must have finished (crouch
+      // hold + one cycle) plus a landing margin, so mashing R2 mid-air does not
+      // re-launch the reference under a robot that is still coming down.
+      auto joy = rt_joy_ptr_.readFromRT();
+      if (joy && joy->get()) {
+        const auto &buttons = joy->get()->buttons;
+        const bool pressed = jump_.trigger_button < static_cast<int>(buttons.size()) &&
+                             buttons[jump_.trigger_button] != 0;
+        const double cycle_end =
+            jump_trigger_time_ + jump_.crouch_hold_s + 1.0 / jump_.frequency;
+        const bool ready = jump_trigger_time_ < 0.0 ||
+                           time_since_fade_in > cycle_end + kJumpRetriggerMarginSeconds;
+        if (pressed && !jump_button_prev_ && ready) {
+          jump_trigger_time_ = time_since_fade_in;
+          RCLCPP_INFO(get_node()->get_logger(), "Jump triggered");
+        }
+        jump_button_prev_ = pressed;
+      }
+      // Untriggered, the clock stays at 0: the reference holds the mid-stance
+      // crouch, which is also the pose every completed jump lands back on.
+      const double t_jump =
+          jump_trigger_time_ < 0.0 ? 0.0 : time_since_fade_in - jump_trigger_time_;
+      compute_jump_reference_offset(jump_, params_.default_joint_pos, t_jump,
                                     observation_.data() + kGaitReferenceIdx);
     }
   } catch (const std::out_of_range &e) {

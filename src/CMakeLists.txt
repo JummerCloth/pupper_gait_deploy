@@ -41,6 +41,7 @@ ament_target_dependencies(
   rclcpp
   rclcpp_lifecycle
   geometry_msgs
+  sensor_msgs
   tf2
 )
 

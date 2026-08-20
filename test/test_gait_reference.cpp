@@ -40,6 +40,129 @@ nlohmann::json read_json(const std::string &path) {
   return j;
 }
 
+// Parity path for the one-shot jump reference (fixture carries "jump_reference"
+// instead of "gait_reference"; cases carry only t -- no command coupling).
+int run_jump_test(const nlohmann::json &j, const std::string &policy_path) {
+  neural_controller::JumpReference jump;
+  try {
+    neural_controller::parse_jump_reference(j.at("jump_reference"), kActionSize, jump);
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "FAIL: %s\n", e.what());
+    return 1;
+  }
+
+  if (!policy_path.empty()) {
+    std::ifstream probe(policy_path);
+    const bool present = static_cast<bool>(probe);
+    probe.close();
+    if (!present) {
+      std::printf("No policy at %s -- skipping the deployed-policy check\n",
+                  policy_path.c_str());
+    } else {
+      try {
+        const nlohmann::json policy = read_json(policy_path);
+        neural_controller::JumpReference from_policy;
+        neural_controller::parse_jump_reference(policy.at("jump_reference"), kActionSize,
+                                                from_policy);
+        const int frame = policy.value("single_observation_size", 36);
+        if (frame != 36 + kActionSize) {
+          std::fprintf(stderr, "FAIL: %s has jump_reference but frame size %d\n",
+                       policy_path.c_str(), frame);
+          return 1;
+        }
+        if (from_policy.jump_table != jump.jump_table) {
+          std::fprintf(stderr, "FAIL: %s jump table differs from the golden table\n",
+                       policy_path.c_str());
+          return 1;
+        }
+        std::printf("Deploy policy %s: jump_reference parsed, table matches the golden data\n",
+                    policy_path.c_str());
+      } catch (const std::exception &e) {
+        std::fprintf(stderr, "FAIL: parsing %s: %s\n", policy_path.c_str(), e.what());
+        return 1;
+      }
+    }
+  }
+
+  const std::vector<double> default_joint_pos =
+      j.at("default_joint_pos").get<std::vector<double>>();
+  if (static_cast<int>(default_joint_pos.size()) != jump.n_joints) {
+    std::fprintf(stderr, "FAIL: default_joint_pos has %zu entries, expected %d\n",
+                 default_joint_pos.size(), jump.n_joints);
+    return 1;
+  }
+
+  int failures = 0;
+  double worst = 0.0;
+  int n_cases = 0;
+  std::vector<float> out(jump.n_joints, 0.0f);
+  for (const auto &c : j.at("cases")) {
+    const double t = c.at("t");
+    const std::vector<double> expected = c.at("expected").get<std::vector<double>>();
+    neural_controller::compute_jump_reference_offset(jump, default_joint_pos, t, out.data());
+    double max_err = 0.0;
+    for (int i = 0; i < jump.n_joints; i++) {
+      max_err = std::max(max_err, std::abs(static_cast<double>(out[i]) - expected[i]));
+    }
+    worst = std::max(worst, max_err);
+    n_cases++;
+    if (max_err > kTolerance) {
+      std::fprintf(stderr, "FAIL case t=%.3f: max_abs_err=%.3e\n", t, max_err);
+      failures++;
+    }
+  }
+
+  // The idle hold (t=0) must be a crouch, not the default pose: the policy was
+  // trained holding this reference, and an all-zero offset would be a different
+  // (untrained) input.
+  std::vector<float> idle(jump.n_joints);
+  neural_controller::compute_jump_reference_offset(jump, default_joint_pos, 0.0, idle.data());
+  bool nonzero = false;
+  for (int i = 0; i < jump.n_joints; i++) {
+    nonzero = nonzero || std::abs(idle[i]) > 1e-3f;
+  }
+  if (!nonzero) {
+    std::fprintf(stderr, "FAIL: idle jump reference is the default pose, not the crouch\n");
+    failures++;
+  }
+
+  // One full wrap: any time past the cycle end must reproduce the idle crouch
+  // exactly (the landing pose IS the launch pose), forever.
+  std::vector<float> landed(jump.n_joints), late(jump.n_joints);
+  const double cycle_end = jump.crouch_hold_s + 1.0 / jump.frequency;
+  neural_controller::compute_jump_reference_offset(jump, default_joint_pos, cycle_end + 1.0,
+                                                   landed.data());
+  neural_controller::compute_jump_reference_offset(jump, default_joint_pos, 3600.0, late.data());
+  for (int i = 0; i < jump.n_joints; i++) {
+    if (std::abs(landed[i] - idle[i]) > 1e-5f || std::abs(late[i] - idle[i]) > 1e-5f) {
+      std::fprintf(stderr, "FAIL: landing hold differs from the idle crouch at joint %d\n", i);
+      failures++;
+      break;
+    }
+  }
+
+  // Mid-cycle must differ from the hold -- a stuck clock would pin the crouch.
+  std::vector<float> mid(jump.n_joints);
+  neural_controller::compute_jump_reference_offset(
+      jump, default_joint_pos, jump.crouch_hold_s + 0.5 / jump.frequency, mid.data());
+  bool differs = false;
+  for (int i = 0; i < jump.n_joints; i++) {
+    differs = differs || std::abs(mid[i] - idle[i]) > 1e-3f;
+  }
+  if (!differs) {
+    std::fprintf(stderr, "FAIL: mid-cycle reference matches the hold -- clock stuck\n");
+    failures++;
+  }
+
+  if (failures > 0) {
+    std::fprintf(stderr, "\n%d check(s) FAILED\n", failures);
+    return 1;
+  }
+  std::printf("OK (jump): %d golden cases matched (worst max_abs_err = %.3e) + 3 property checks\n",
+              n_cases, worst);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -52,6 +175,9 @@ int main(int argc, char **argv) {
   neural_controller::GaitReference gait;
   try {
     j = read_json(path);
+    if (j.contains("jump_reference")) {
+      return run_jump_test(j, policy_path);
+    }
     neural_controller::parse_gait_reference(j.at("gait_reference"), kActionSize, gait);
   } catch (const std::exception &e) {
     std::fprintf(stderr, "FAIL: %s\n", e.what());

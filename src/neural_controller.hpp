@@ -16,6 +16,7 @@
 #include "rclcpp_lifecycle/state.hpp"
 #include "realtime_tools/realtime_buffer.h"
 #include "realtime_tools/realtime_publisher.h"
+#include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
@@ -90,6 +91,21 @@ class NeuralController : public controller_interface::ControllerInterface {
   GaitReference gait_;
   bool use_gait_reference_ = false;
 
+  // One-shot jump reference (mjlab's jump task), from the JSON's
+  // "jump_reference" block. Mutually exclusive with gait_: the jump policy
+  // holds the reference's crouch until a joy button (R2 by default) arms the
+  // clock, plays exactly one cycle, and holds the landing crouch. Re-pressing
+  // after the cycle (plus a landing margin) jumps again.
+  JumpReference jump_;
+  bool use_jump_reference_ = false;
+  // Seconds (on the time_since_fade_in clock) the jump was triggered at;
+  // negative means never, i.e. the idle crouch hold.
+  double jump_trigger_time_ = -1.0;
+  bool jump_button_prev_ = false;
+  // How long after the cycle ends before another trigger is accepted -- the
+  // landing needs to settle before the legs can load again.
+  static constexpr double kJumpRetriggerMarginSeconds = 0.3;
+
   // Heading hold: deploy mirror of mjlab's command-side loop (the policies
   // train on the same closed-loop command profile). While walking with a quiet
   // commanded yaw, the yaw command fed to the policy (and the gait reference)
@@ -147,6 +163,11 @@ class NeuralController : public controller_interface::ControllerInterface {
 
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr emergency_stop_subscriber_ = nullptr;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr emergency_stop_reset_subscriber_ = nullptr;
+
+  // Gamepad, for the jump trigger. Only subscribed when the policy carries a
+  // jump reference.
+  realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Joy>> rt_joy_ptr_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_ = nullptr;
 
   // Alias message types for future improvements
   using ActionMsg = std_msgs::msg::Float32MultiArray;

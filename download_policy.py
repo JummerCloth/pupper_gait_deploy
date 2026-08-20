@@ -138,6 +138,7 @@ def validate(path: Path) -> dict:
   frame = policy.get("single_observation_size", BASE_OBSERVATION_SIZE)
   in_dim = policy["in_shape"][1]
   gait = policy.get("gait_reference")
+  jump = policy.get("jump_reference")
 
   problems = []
   if history is None:
@@ -154,12 +155,29 @@ def validate(path: Path) -> dict:
   if policy["layers"][-1]["shape"][1] != ACTION_SIZE:
     problems.append(f"policy outputs {policy['layers'][-1]['shape'][1]} actions, expected {ACTION_SIZE}")
 
-  if gait is None:
+  if gait is not None and jump is not None:
+    problems.append("both gait_reference and jump_reference present; only one is allowed")
+  if gait is None and jump is None:
     if frame != BASE_OBSERVATION_SIZE:
       problems.append(
-        f"single_observation_size is {frame} but there is no gait_reference block; "
-        "the controller cannot fill the extra dimensions"
+        f"single_observation_size is {frame} but there is no gait_reference or "
+        "jump_reference block; the controller cannot fill the extra dimensions"
       )
+  elif jump is not None:
+    if frame != BASE_OBSERVATION_SIZE + ACTION_SIZE:
+      problems.append(
+        f"jump_reference present but single_observation_size is {frame}, "
+        f"expected {BASE_OBSERVATION_SIZE + ACTION_SIZE}"
+      )
+    n = jump.get("n_samples", 0)
+    rows = jump.get("jump_table", [])
+    if len(rows) != n or any(len(r) != ACTION_SIZE for r in rows):
+      problems.append(f"jump_table is not {n}x{ACTION_SIZE}")
+    for key in ("frequency", "crouch_hold_s", "phase_start"):
+      if key not in jump:
+        problems.append(f"jump_reference missing {key}")
+    if jump.get("joint_names") and jump["joint_names"] != EXPECTED_JOINT_NAMES:
+      problems.append("jump_reference joint_names do not match the controller config order")
   else:
     if frame != BASE_OBSERVATION_SIZE + ACTION_SIZE:
       problems.append(
@@ -181,10 +199,20 @@ def validate(path: Path) -> dict:
       problems.append("gait_reference joint_names do not match the controller config order")
 
   print()
-  print(f"  frame size:          {frame} " + ("(mimic / motion reference)" if gait else "(plain proprio)"))
+  kind = "(mimic / motion reference)" if gait else ("(one-shot jump)" if jump else "(plain proprio)")
+  print(f"  frame size:          {frame} {kind}")
   print(f"  observation history: {history}  -> input {in_dim}")
   print(f"  kp / kd:             {policy.get('kp')} / {policy.get('kd')}")
   print(f"  action scale:        {policy.get('action_scale')}")
+  if jump:
+    print(
+      f"  jump table:          {jump['n_samples']} phase samples, {jump['frequency']:.3f} Hz "
+      f"once triggered, {jump['crouch_hold_s']:.2f} s crouch hold"
+    )
+    print(
+      f"  trigger:             joy button {jump.get('trigger_button', 7)} (R2); the robot "
+      "holds the crouch until pressed"
+    )
   if gait:
     print(f"  gait tables:         {gait['n_samples']} phase samples, {gait['frequency']:.3f} Hz")
     if "lift_table" in gait:

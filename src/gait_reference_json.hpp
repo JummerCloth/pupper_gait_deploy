@@ -69,4 +69,43 @@ inline void parse_gait_reference(const Json &block, int n_joints, GaitReference 
   }
 }
 
+/**
+ * Fill a JumpReference from the "jump_reference" block of a deploy JSON.
+ *
+ * Same templating rationale as parse_gait_reference above; throws
+ * std::runtime_error on anything malformed so a bad policy fails at load.
+ */
+template <typename Json>
+inline void parse_jump_reference(const Json &block, int n_joints, JumpReference &jump) {
+  jump.n_joints = n_joints;
+  jump.n_samples = block.at("n_samples");
+  jump.frequency = block.at("frequency");
+  jump.crouch_hold_s = block.at("crouch_hold_s");
+  jump.phase_start = block.at("phase_start");
+  if (block.contains("trigger_button")) {
+    jump.trigger_button = block.at("trigger_button");
+  }
+
+  const auto &rows = block.at("jump_table");
+  if (static_cast<int>(rows.size()) != jump.n_samples) {
+    throw std::runtime_error("jump_table has " + std::to_string(rows.size()) +
+                             " rows, expected n_samples=" + std::to_string(jump.n_samples));
+  }
+  jump.jump_table.clear();
+  jump.jump_table.reserve(static_cast<std::size_t>(jump.n_samples) * n_joints);
+  for (const auto &row : rows) {
+    if (static_cast<int>(row.size()) != n_joints) {
+      throw std::runtime_error("jump_table row has " + std::to_string(row.size()) +
+                               " entries, expected " + std::to_string(n_joints));
+    }
+    for (const auto &v : row) {
+      jump.jump_table.push_back(v);
+    }
+  }
+
+  if (!jump.valid()) {
+    throw std::runtime_error("jump_reference block is not self-consistent");
+  }
+}
+
 }  // namespace neural_controller

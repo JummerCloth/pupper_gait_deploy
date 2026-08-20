@@ -92,7 +92,10 @@ could not even load. The changes here:
 - **`src/gait_reference.hpp`** (new) — the reference lookup: phase clock, gallop
   switch, time reversal for backward/turning commands, and the speed blend toward
   the default standing pose. No IK on the robot; the phase → joint-angle tables are
-  precomputed by mjlab and shipped inside the policy JSON.
+  precomputed by mjlab and shipped inside the policy JSON. Fast gaits are
+  direction-split: a policy can ship an optional `gallop_back_table` (pre-reversed
+  by the exporter) that plays for backward-fast commands instead of the
+  time-reversed forward table; policies without it keep the old behavior.
 - **`src/neural_controller.{hpp,cpp}`** — frame size is now read from the policy's
   `single_observation_size` (absent ⇒ 36, so **every existing policy keeps loading
   unchanged**), the `gait_reference` block is parsed at load, and the reference is
@@ -150,8 +153,8 @@ you must do whenever the reference tables or the gait parameters change.
 On the robot:
 
 ```bash
-./deploy.sh mjlab/pdfzwf3l          # download that run's policy, install, rebuild, launch
-python3 download_policy.py mjlab/pdfzwf3l   # download only
+./deploy.sh mjlab/tryieau1          # download that run's policy, install, rebuild, launch
+python3 download_policy.py mjlab/tryieau1   # download only
 python3 download_policy.py --validate-only mimic_policy.json
 ```
 
@@ -160,8 +163,9 @@ frame size vs. input shape, joint ordering, table dimensions, action count — b
 each of those is silent on hardware right up until the legs move.
 
 `mimic_policy.json` in this repo is the currently deployed policy (mjlab run
-`pdfzwf3l`, the bumpy-terrain trot/gallop), so a plain `git pull && ./deploy.sh`
-reproduces a known-good robot.
+`tryieau1` at `model_6500`, the captured-reference MixedGaits trot/gallop,
+trained across the full ±1.5 m/s command band), so a plain
+`git pull && ./deploy.sh` reproduces a known-good robot.
 
 ## Layout
 
@@ -180,6 +184,35 @@ test/gait_golden.json         -> neural_controller/test/
 
 `install.py --dry-run` prints the mapping without touching anything; every
 overwritten file is backed up next to itself with a `.backup` suffix.
+
+## Jump policies (one-shot reference, R2 to hop)
+
+A policy exported from `Mjlab-Jump-Flat-Pupper-v3` carries a `jump_reference`
+block instead of `gait_reference`: the same 48-dim frame, but the reference slot
+plays a *one-shot* table driven by seconds-since-trigger rather than a
+command-blended cycle. With such a policy loaded the robot ignores `/cmd_vel`
+content-wise (it trained on an all-zero command, so keep the sticks quiet),
+**holds the mid-stance crouch**, and on a **rising edge of R2** (`/joy` button 7
+by default; the JSON's `trigger_button` overrides) plays exactly one cycle:
+0.3 s of crouch hold, launch, flight, and a landing back onto the same crouch,
+where it waits for the next press. Re-triggers are ignored until the cycle plus
+a 0.3 s landing margin has elapsed, so mashing R2 mid-air does not re-launch
+the reference under a descending robot.
+
+```bash
+# training machine
+uv run export-pupper-policy Mjlab-Jump-Flat-Pupper-v3 \
+    --wandb-run-path jummer/mjlab/zuy6c85c --upload-wandb \
+    --golden-output jump_golden.json
+# robot
+python3 download_policy.py jummer/mjlab/zuy6c85c
+python3 install.py && cd ~/pupperv3-monorepo/ros2_ws && colcon build --packages-select neural_controller
+```
+
+Mind the estop: the trained jump pitches ~20-27 deg nose-up in flight, so
+`max_body_angle` must stay comfortably above that or the estop fires at the
+apex. The shipped `config.yaml` (1.5 rad ~ 86 deg) is fine; the sim policy was
+trained with a 45 deg cutoff, so anything in between also works.
 
 ## Tests
 
@@ -205,9 +238,10 @@ produces a policy being fed an input it has never seen.
   keeps its physical 0.75 s cadence. It is kept in `double`: the robot stays up
   far longer than a 10 s sim episode, and a `float` visibly quantizes the phase
   after a few minutes of uptime.
-- **Teleop range.** `scale_linear.x` is 0.75, and the gallop engages at
-  \|vx\| ≥ 0.5, so full forward stick galloping. The policy was trained to 1.0 m/s
-  if you want to raise it.
+- **Teleop range.** `scale_linear.x` is 1.5: full stick is the ±1.5 m/s the
+  captured-reference checkpoints (run `tryieau1` onward) actually train on. The
+  trot-to-fast switch comes from the policy JSON's `gallop_speed` (0.5 m/s), so
+  the fast gait engages at a third of stick deflection in either direction.
 - **First run.** `max_body_angle` is 1.5 rad for the mimic mode (vs 0.52 for the
   walking modes) so an early trot attempt does not trip the fall e-stop
   immediately. Tighten it once the gait is trusted.

@@ -132,4 +132,66 @@ inline void compute_gait_reference_offset(const GaitReference &gait,
   }
 }
 
+/**
+ * One-shot jump reference (mjlab's Pupper "jump" task, mdp/jump.py).
+ *
+ * Unlike GaitReference this has no blend and no command coupling: the offset is a
+ * function of seconds-since-trigger alone. Untriggered (t = 0) the clamp pins the
+ * phase at phase_start -- the mid-stance crouch, the pose the policy holds -- and a
+ * trigger sweeps exactly one cycle, landing one full wrap later on the same crouch,
+ * where any larger t stays. All parameters come from the "jump_reference" block of
+ * the deploy JSON; the math transcribes mjlab's jump_reference_offset_numpy(),
+ * parity-tested against the training-time term -- keep the three in step.
+ */
+struct JumpReference {
+  int n_samples = 0;
+  int n_joints = 0;
+  // Phase cycles per second once triggered (the jump gait's 2.5x clock).
+  double frequency = 0.0;
+  // Seconds the reference holds the crouch after the trigger before launching.
+  double crouch_hold_s = 0.0;
+  // Where in the cycle the one-shot playback starts and ends (mid-stance).
+  double phase_start = 0.0;
+  // Joy button index that arms the clock (R2 in the standard PS4/PS5 mapping).
+  int trigger_button = 7;
+  // Row-major n_samples x n_joints joint angles, clamped as training clamped them.
+  std::vector<double> jump_table;
+
+  bool valid() const {
+    return n_samples > 0 && n_joints > 0 && frequency > 0.0 && crouch_hold_s >= 0.0 &&
+           trigger_button >= 0 &&
+           jump_table.size() == static_cast<std::size_t>(n_samples) * n_joints;
+  }
+};
+
+/**
+ * Compute the one-shot jump reference offset the policy expects to see.
+ *
+ * @param jump              Table and clock from the deploy JSON.
+ * @param default_joint_pos Default pose, jump.n_joints entries, policy joint order.
+ * @param t                 Seconds since the jump was triggered; pass 0.0 while
+ *                          untriggered (the idle crouch hold).
+ * @param out               Receives jump.n_joints offsets.
+ */
+inline void compute_jump_reference_offset(const JumpReference &jump,
+                                          const std::vector<double> &default_joint_pos,
+                                          double t, float *out) {
+  // min/max rather than std::clamp for the same C++14 reason as above.
+  const double swept = std::min(std::max((t - jump.crouch_hold_s) * jump.frequency, 0.0), 1.0);
+  const double phase = jump.phase_start + swept;
+
+  const double pos = phase * jump.n_samples;
+  const double pos_floor = std::floor(pos);
+  const int i0 = detail::floor_mod(static_cast<std::int64_t>(pos_floor), jump.n_samples);
+  const int i1 = (i0 + 1) % jump.n_samples;
+  const double alpha = pos - pos_floor;
+
+  for (int j = 0; j < jump.n_joints; j++) {
+    const double lo = jump.jump_table[static_cast<std::size_t>(i0) * jump.n_joints + j];
+    const double hi = jump.jump_table[static_cast<std::size_t>(i1) * jump.n_joints + j];
+    const double reference = lo * (1.0 - alpha) + hi * alpha;
+    out[j] = static_cast<float>(reference - default_joint_pos[j]);
+  }
+}
+
 }  // namespace neural_controller
