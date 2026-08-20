@@ -329,9 +329,12 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   hh_target_ = 0.0;
   hh_prev_active_ = false;
 
-  // Disarm the jump clock; the robot holds the crouch until the next trigger.
+  // Disarm the jump clock; the first jump auto-triggers when the fade-in
+  // completes (R2 both switches this controller in and asks for a jump, so
+  // activation implies one). The button starts "held": R2 is still down from
+  // the switch press, and a rising edge needs a release first.
   jump_trigger_time_ = -1.0;
-  jump_button_prev_ = false;
+  jump_button_prev_ = true;
   rt_joy_ptr_ = realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Joy>>(nullptr);
 
   // Initialize the observation vector
@@ -672,10 +675,19 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
                                     cmd_x_vel_, cmd_y_vel_, cmd_yaw_eff,
                                     observation_.data() + kGaitReferenceIdx);
     } else if (use_jump_reference_) {
-      // Rising edge on the trigger button arms the one-shot clock. Accepted only
-      // when no cycle is in flight: the previous jump must have finished (crouch
-      // hold + one cycle) plus a landing margin, so mashing R2 mid-air does not
-      // re-launch the reference under a robot that is still coming down.
+      // The activation press is a jump request (R2 both switches this
+      // controller in and asks for a hop), so the first jump auto-triggers the
+      // moment the fade-in completes and the policy has full authority.
+      const bool faded_in = fade_in_multiplier >= 1.0;
+      if (faded_in && jump_trigger_time_ < 0.0) {
+        jump_trigger_time_ = time_since_fade_in;
+        RCLCPP_INFO(get_node()->get_logger(), "Jump triggered (on activation)");
+      }
+      // Further jumps: a rising edge on the trigger button arms the one-shot
+      // clock. Accepted only when no cycle is in flight: the previous jump must
+      // have finished (crouch hold + one cycle) plus a landing margin, so
+      // mashing R2 mid-air does not re-launch the reference under a robot that
+      // is still coming down.
       auto joy = rt_joy_ptr_.readFromRT();
       if (joy && joy->get()) {
         const auto &buttons = joy->get()->buttons;
@@ -683,8 +695,9 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
                              buttons[jump_.trigger_button] != 0;
         const double cycle_end =
             jump_trigger_time_ + jump_.crouch_hold_s + 1.0 / jump_.frequency;
-        const bool ready = jump_trigger_time_ < 0.0 ||
-                           time_since_fade_in > cycle_end + kJumpRetriggerMarginSeconds;
+        const bool ready =
+            faded_in && (jump_trigger_time_ < 0.0 ||
+                         time_since_fade_in > cycle_end + kJumpRetriggerMarginSeconds);
         if (pressed && !jump_button_prev_ && ready) {
           jump_trigger_time_ = time_since_fade_in;
           RCLCPP_INFO(get_node()->get_logger(), "Jump triggered");

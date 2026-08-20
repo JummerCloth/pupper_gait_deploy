@@ -242,7 +242,14 @@ def main() -> int:
   parser.add_argument("--project", default="mjlab")
   parser.add_argument("--entity", default=None)
   parser.add_argument("--file", default="policy.json", help="Run file to download")
-  parser.add_argument("--output", type=Path, default=REPO / "mimic_policy.json")
+  parser.add_argument(
+    "--output",
+    type=Path,
+    default=None,
+    help="Destination path. Default: mimic_policy.json, or jump_policy.json when "
+    "the downloaded policy carries a jump_reference block -- so downloading a "
+    "jump policy cannot silently overwrite the mixed-gaits policy in the L1 slot.",
+  )
   parser.add_argument("--validate-only", type=Path, default=None, help="Validate a local JSON and exit")
   args = parser.parse_args()
 
@@ -256,10 +263,18 @@ def main() -> int:
   downloads = REPO / ".downloads"
   downloads.mkdir(exist_ok=True)
   downloaded = fetch(run_path, args.file, downloads)
-  validate(downloaded)
+  policy = validate(downloaded)
 
-  shutil.copy2(downloaded, args.output)
-  print(f"\nWrote {args.output}")
+  output = args.output
+  if output is None:
+    # Route by kind so a jump policy lands in the R2 slot's file rather than
+    # clobbering the mixed-gaits policy that L1 loads.
+    is_jump = "jump_reference" in policy
+    output = REPO / ("jump_policy.json" if is_jump else "mimic_policy.json")
+    print(f"\nPolicy kind: {'jump' if is_jump else 'gait/velocity'} -> {output.name}")
+
+  shutil.copy2(downloaded, output)
+  print(f"\nWrote {output}")
   print("Next: python3 install.py")
   return 0
 

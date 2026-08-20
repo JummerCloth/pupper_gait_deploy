@@ -30,6 +30,14 @@ controller_manager:
       type: neural_controller/NeuralController
 
 
+    # One-shot jump policy (mjlab's Mjlab-Jump-Flat-Pupper-v3): also 48-dim,
+    # but the reference slot is a trigger clock rather than a command-blended
+    # cycle. Activated by R2 (see estop_controller below); it auto-plays one
+    # jump when its fade-in completes, and each further R2 press hops again.
+    neural_controller_jump:
+      type: neural_controller/NeuralController
+
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -393,13 +401,92 @@ neural_controller_mimic:
     model_path: "$(find-pkg-share neural_controller)/launch/mimic_policy.json"
 
 
+# One-shot jump policy exported from mjlab's Pupper jump task. Same contract
+# as the mimic section: everything the policy pins down comes from
+# jump_policy.json, this section only carries what the controller needs before
+# the JSON is read. Shorter init/fade than the walking modes: R2 should feel
+# like a jump button, and the policy takes over into a static crouch rather
+# than a gait, so there is less to ease into. R2 -> jump latency is
+# init_duration + fade_in_duration + the reference's 0.3 s crouch hold.
+neural_controller_jump:
+  ros__parameters:
+    repeat_action: 10
+
+
+    gain_multiplier: 1.0
+    estop_kd: 0.1
+
+
+    joint_names:
+      [
+        "leg_front_r_1",
+        "leg_front_r_2",
+        "leg_front_r_3",
+        "leg_front_l_1",
+        "leg_front_l_2",
+        "leg_front_l_3",
+        "leg_back_r_1",
+        "leg_back_r_2",
+        "leg_back_r_3",
+        "leg_back_l_1",
+        "leg_back_l_2",
+        "leg_back_l_3",
+      ]
+
+
+    default_joint_pos:
+      [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
+
+
+    init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+
+
+    # Same per-joint trims as the mimic section (weak leg_front_l_2,
+    # leg_front_l_3 and leg_back_r_3); the jump policy's kp is also 5.5.
+    kp_scale:
+      [1.0, 1.0, 1.0, 1.0, 1.0909, 1.0909, 1.0, 1.0, 1.0909, 1.0, 1.0, 1.0]
+    init_kds:
+      [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+
+    init_duration: 1.5
+    fade_in_duration: 1.0
+
+
+    action_types:
+      [
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+      ]
+
+
+    # The trained jump pitches ~20-27 deg nose-up in flight; keep the estop
+    # well above that. 1.5 rad matches the mimic section.
+    max_body_angle: 1.5
+
+
+    model_path: "$(find-pkg-share neural_controller)/launch/jump_policy.json"
+
+
 # Joystick controller switching. Set explicitly here (rather than relying on the
 # compiled-in defaults, which differ between the upstream monorepo and lab 5) so
 # the mimic mode gets a button without disturbing the existing four.
-#   x = walk, o = three-legged, triangle = parkour, square = test, L1 = mimic
+#   x = walk, o = three-legged, triangle = parkour, square = test, L1 = mimic,
+#   R2 = jump (the jump controller then auto-plays one jump after fade-in, and
+#   each further R2 press while it is active hops again; L1 returns to mimic).
 estop_controller:
   ros__parameters:
-    switch_button_indices: [0, 1, 2, 3, 4]
+    switch_button_indices: [0, 1, 2, 3, 4, 7]
     controller_names:
       [
         "neural_controller",
@@ -407,6 +494,7 @@ estop_controller:
         "neural_controller_parkour",
         "neural_controller_test",
         "neural_controller_mimic",
+        "neural_controller_jump",
       ]
 
 

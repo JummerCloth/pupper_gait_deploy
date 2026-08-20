@@ -190,24 +190,44 @@ overwritten file is backed up next to itself with a `.backup` suffix.
 A policy exported from `Mjlab-Jump-Flat-Pupper-v3` carries a `jump_reference`
 block instead of `gait_reference`: the same 48-dim frame, but the reference slot
 plays a *one-shot* table driven by seconds-since-trigger rather than a
-command-blended cycle. With such a policy loaded the robot ignores `/cmd_vel`
-content-wise (it trained on an all-zero command, so keep the sticks quiet),
-**holds the mid-stance crouch**, and on a **rising edge of R2** (`/joy` button 7
-by default; the JSON's `trigger_button` overrides) plays exactly one cycle:
-0.3 s of crouch hold, launch, flight, and a landing back onto the same crouch,
-where it waits for the next press. Re-triggers are ignored until the cycle plus
-a 0.3 s landing margin has elapsed, so mashing R2 mid-air does not re-launch
-the reference under a descending robot.
+command-blended cycle. It gets its own controller instance,
+`neural_controller_jump`, loaded from `launch/jump_policy.json` — the mixed
+gaits stay in `neural_controller_mimic` on L1, untouched.
+
+**R2 switches to the jump controller and performs a single jump**: the
+`estop_controller` switch list maps button 7 (R2 under this pad's
+0=x, 1=o, 2=△, 3=□, 4=L1 mapping) to `neural_controller_jump`, which folds to
+the crouch through its init/fade (1.5 s + 1.0 s, tighter than the walking
+modes), auto-triggers one jump the moment the fade-in completes (the
+activation press was the request), and lands back into the crouch. Each
+further R2 press while it is active hops again — rising-edge, ignored until
+the previous cycle plus a 0.3 s landing margin has passed, so mashing R2
+mid-air does nothing. **L1 returns to the mixed gaits.** The jump policy
+trained on an all-zero command, so keep the sticks quiet while it is active.
+
+`jump_policy.json` (run `zuy6c85c`, 0.55 m apex in sim) ships in this repo like
+`mimic_policy.json` does, so deploying is just:
 
 ```bash
-# training machine
-uv run export-pupper-policy Mjlab-Jump-Flat-Pupper-v3 \
-    --wandb-run-path jummer/mjlab/zuy6c85c --upload-wandb \
-    --golden-output jump_golden.json
 # robot
-python3 download_policy.py jummer/mjlab/zuy6c85c
+git pull
 python3 install.py && cd ~/pupperv3-monorepo/ros2_ws && colcon build --packages-select neural_controller
 ```
+
+To ship a newer jump run, re-export on the training machine and replace the
+file (or use download_policy.py, which routes a jump policy to
+jump_policy.json by its `jump_reference` block, so it cannot clobber the
+mixed-gaits policy in the L1 slot):
+
+```bash
+uv run export-pupper-policy Mjlab-Jump-Flat-Pupper-v3 \
+    --wandb-run-path <entity/project/run> --output jump_policy.json \
+    --golden-output jump_golden.json
+```
+
+If a jump policy was previously downloaded over `mimic_policy.json` (the old
+default output), restore the L1 slot with `git checkout -- mimic_policy.json`
+or by re-downloading the mixed-gaits run.
 
 Mind the estop: the trained jump pitches ~20-27 deg nose-up in flight, so
 `max_body_angle` must stay comfortably above that or the estop fires at the

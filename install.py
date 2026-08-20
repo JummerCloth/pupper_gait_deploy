@@ -83,6 +83,11 @@ def file_mappings(monorepo: Path) -> list[tuple[Path, Path, str]]:
       launch / "mimic_policy.json",
       "Motion-reference policy loaded by neural_controller_mimic",
     ),
+    (
+      REPO / "jump_policy.json",
+      launch / "jump_policy.json",
+      "One-shot jump policy loaded by neural_controller_jump (R2)",
+    ),
   ]
 
 
@@ -100,7 +105,7 @@ def install(monorepo: Path, dry_run: bool) -> bool:
     print(f"  destination: {destination}")
 
     if not source.exists():
-      if source.name == "mimic_policy.json":
+      if source.name in ("mimic_policy.json", "jump_policy.json"):
         print("  SKIPPED: no policy here yet -- run download_policy.py first")
         continue
       print("  ERROR: source file does not exist")

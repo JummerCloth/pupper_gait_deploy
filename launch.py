@@ -188,6 +188,21 @@ def generate_launch_description():
     )
 
 
+    # One-shot jump policy (switched in by R2; see estop_controller in config.yaml).
+    jump_robot_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "neural_controller_jump",
+            "--controller-manager",
+            "/controller_manager",
+            "--controller-manager-timeout",
+            "30",
+            "--inactive",
+        ],
+    )
+
+
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
@@ -249,6 +264,7 @@ def generate_launch_description():
         parkour_robot_controller_spawner,
         test_robot_controller_spawner,
         mimic_robot_controller_spawner,
+        jump_robot_controller_spawner,
         joint_state_broadcaster_spawner,
         # Comment/uncomment as needed:
         imu_sensor_broadcaster_spawner,
