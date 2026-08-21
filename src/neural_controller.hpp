@@ -4,6 +4,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 #include "rclcpp_lifecycle/state.hpp"
 #include "realtime_tools/realtime_buffer.h"
 #include "realtime_tools/realtime_publisher.h"
+#include "controller_manager_msgs/srv/switch_controller.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/float32.hpp"
@@ -98,6 +100,23 @@ class NeuralController : public controller_interface::ControllerInterface {
   // after the cycle (plus a landing margin) jumps again.
   JumpReference jump_;
   bool use_jump_reference_ = false;
+
+  // MixedGaitsJump: a jump slot insertable into the mixed reference on a
+  // button press (game mode). Coexists with gait_; mutually exclusive with
+  // jump_. Two pending starts, like training's schedule tensor; +inf = none.
+  JumpSlot jump_slot_;
+  bool use_jump_slot_ = false;
+  std::array<double, 2> slot_starts_{{std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::infinity()}};
+  bool slot_button_prev_ = true;
+
+  // L1+R1 chord: switch to cfg's chord_partner controller (game-mode toggle).
+  // Detection and the (non-realtime) service call happen in the joy callback.
+  rclcpp::Client<controller_manager_msgs::srv::SwitchController>::SharedPtr
+      chord_client_ = nullptr;
+  bool chord_prev_ = true;
+  static constexpr int kChordButtonA = 4;  // L1
+  static constexpr int kChordButtonB = 5;  // R1
   // Seconds (on the time_since_fade_in clock) the jump was triggered at;
   // negative means never, i.e. the idle crouch hold.
   double jump_trigger_time_ = -1.0;

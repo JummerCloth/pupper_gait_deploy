@@ -162,6 +162,16 @@ controller_interface::CallbackReturn NeuralController::on_init() {
                    "slot can only carry one");
       return controller_interface::CallbackReturn::ERROR;
     }
+    // MixedGaitsJump policies additionally carry a "jump_slot" block: the same
+    // gait reference, plus a jump table insertable on the X button. The slot
+    // rides on the gait clock, so it requires the gait block.
+    use_jump_slot_ = j.find("jump_slot") != j.end();
+    if (use_jump_slot_ && !use_gait_reference_) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "jump_slot block requires a gait_reference block (the slot overlays "
+                   "the mixed gait reference)");
+      return controller_interface::CallbackReturn::ERROR;
+    }
     if (use_gait_reference_) {
       // Throws (and is caught below) if the block is malformed.
       parse_gait_reference(j["gait_reference"], kActionSize, gait_);
@@ -179,6 +189,16 @@ controller_interface::CallbackReturn NeuralController::on_init() {
                   "blend_speed=%.3f",
                   gait_.n_samples, gait_.frequency, gait_.gallop_freq_mult, gait_.gallop_speed,
                   gait_.blend_speed);
+      if (use_jump_slot_) {
+        parse_jump_slot(j["jump_slot"], kActionSize, jump_slot_);
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Jump slot (game mode): %d samples over %.2f s (%.2f s active), grid "
+                    "%.2f s, busy %.2f s, jump on button %d, run on button %d "
+                    "(caps %.2f / %.2f m/s)",
+                    jump_slot_.n_samples, jump_slot_.playback_s, jump_slot_.active_s,
+                    jump_slot_.grid_s, jump_slot_.busy_s, jump_slot_.trigger_button,
+                    jump_slot_.run_button, jump_slot_.walk_speed_cap, jump_slot_.run_speed_cap);
+      }
     } else if (use_jump_reference_) {
       parse_jump_reference(j["jump_reference"], kActionSize, jump_);
       if (single_observation_size_ != kGaitObservationSize) {
@@ -337,6 +357,14 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   jump_button_prev_ = true;
   rt_joy_ptr_ = realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Joy>>(nullptr);
 
+  // Clear any pending jump slots; the trigger button starts "held" so a button
+  // that happens to be down through the controller switch needs a release
+  // before it schedules a jump. Same for the L1+R1 chord -- the press that
+  // switched this controller in is still down.
+  slot_starts_.fill(std::numeric_limits<double>::infinity());
+  slot_button_prev_ = true;
+  chord_prev_ = true;
+
   // Initialize the observation vector
   observation_.assign(params_.observation_history * single_observation_size_, 0.0);
 
@@ -366,13 +394,50 @@ controller_interface::CallbackReturn NeuralController::on_activate(
         RCLCPP_INFO(get_node()->get_logger(), "Emergency stop triggered");
       });
 
-  // Gamepad, for the jump trigger (R2 by default). Only wired up for jump
-  // policies so gait/velocity policies are untouched by joystick chatter.
-  if (use_jump_reference_) {
+  // Gamepad. Wired up for jump policies (R2 trigger), jump-slot policies
+  // (X jump + circle run cap), and any controller with a chord partner
+  // (L1+R1 switch); plain gait/velocity policies stay untouched by joystick
+  // chatter. Chord detection lives here rather than in update() because the
+  // controller_manager switch is a service call -- non-realtime by nature.
+  if (!params_.chord_partner.empty()) {
+    chord_client_ = get_node()->create_client<controller_manager_msgs::srv::SwitchController>(
+        "/controller_manager/switch_controller");
+    RCLCPP_INFO(get_node()->get_logger(), "L1+R1 chord switches to controller '%s'",
+                params_.chord_partner.c_str());
+  } else {
+    chord_client_ = nullptr;
+  }
+  if (use_jump_reference_ || use_jump_slot_ || chord_client_) {
     joy_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::Joy>(
         "/joy", rclcpp::SystemDefaultsQoS(),
         [this](const sensor_msgs::msg::Joy::SharedPtr msg) {
           rt_joy_ptr_.writeFromNonRT(msg);
+          // Local copy: on_deactivate resets chord_client_ from another thread.
+          auto client = chord_client_;
+          if (client == nullptr) {
+            return;
+          }
+          const auto &b = msg->buttons;
+          const bool chord = kChordButtonA < static_cast<int>(b.size()) &&
+                             kChordButtonB < static_cast<int>(b.size()) &&
+                             b[kChordButtonA] != 0 && b[kChordButtonB] != 0;
+          if (chord && !chord_prev_) {
+            auto req = std::make_shared<
+                controller_manager_msgs::srv::SwitchController::Request>();
+            req->activate_controllers.push_back(params_.chord_partner);
+            req->deactivate_controllers.push_back(get_node()->get_name());
+            req->strictness =
+                controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
+            req->activate_asap = true;
+            // The empty response callback prunes the pending request; the
+            // switch's effect is observable directly (this controller stops).
+            client->async_send_request(
+                req, [](rclcpp::Client<
+                         controller_manager_msgs::srv::SwitchController>::SharedFuture) {});
+            RCLCPP_INFO(get_node()->get_logger(), "L1+R1: switching %s -> %s",
+                        get_node()->get_name(), params_.chord_partner.c_str());
+          }
+          chord_prev_ = chord;
         });
   }
 
@@ -441,6 +506,12 @@ controller_interface::CallbackReturn NeuralController::on_deactivate(
         .get()
         .set_value(params_.estop_kd);
   }
+
+  // Tear down the gamepad subscription and chord client: an inactive
+  // controller must not keep watching L1+R1, or it would answer the chord at
+  // the same time as the controller that replaced it and switch right back.
+  joy_subscriber_.reset();
+  chord_client_.reset();
 
   // Clear command and state interfaces maps
   command_interfaces_map_.clear();
@@ -511,6 +582,69 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
                       pose_msg.orientation.w);
     desired_world_z_in_body_frame_ = tf2::Vector3(0, 0, 1);
     desired_world_z_in_body_frame_ = tf2::quatRotate(q.inverse(), desired_world_z_in_body_frame_);
+  }
+
+  // Game mode (jump-slot policies): walk-speed cap unless the run button
+  // (circle) is held, and a rising edge on the trigger button (X) schedules a
+  // jump at the next gait-grid point past any pending slot's busy window --
+  // the same arithmetic as training's request_jump, on the fade-in clock.
+  if (use_jump_slot_) {
+    bool run_held = false;
+    bool trigger_pressed = false;
+    auto joy = rt_joy_ptr_.readFromRT();
+    if (joy && joy->get()) {
+      const auto &b = joy->get()->buttons;
+      auto held = [&](int idx) {
+        return idx >= 0 && idx < static_cast<int>(b.size()) && b[idx] != 0;
+      };
+      run_held = held(jump_slot_.run_button);
+      trigger_pressed = held(jump_slot_.trigger_button);
+    }
+    const float cap = static_cast<float>(run_held ? jump_slot_.run_speed_cap
+                                                  : jump_slot_.walk_speed_cap);
+    // Clamping the stored command is self-healing: teleop republishes
+    // continuously, so releasing circle mid-run only pins the next few frames.
+    cmd_x_vel_ = std::min(std::max(cmd_x_vel_, -cap), cap);
+    cmd_y_vel_ = std::min(std::max(cmd_y_vel_, -cap), cap);
+
+    // Retire slots whose busy window has fully passed.
+    for (auto &s : slot_starts_) {
+      if (std::isfinite(s) && time_since_fade_in > s + jump_slot_.busy_s) {
+        s = std::numeric_limits<double>::infinity();
+      }
+    }
+    if (trigger_pressed && !slot_button_prev_ && fade_in_multiplier >= 1.0f) {
+      double start =
+          std::ceil((time_since_fade_in + 1e-6) / jump_slot_.grid_s) * jump_slot_.grid_s;
+      for (std::size_t pass = 0; pass <= slot_starts_.size(); pass++) {
+        bool blocked = false;
+        for (const double s : slot_starts_) {
+          if (std::isfinite(s) && s <= start && start < s + jump_slot_.busy_s) {
+            start = std::ceil((s + jump_slot_.busy_s - 1e-6) / jump_slot_.grid_s) *
+                    jump_slot_.grid_s;
+            blocked = true;
+          }
+        }
+        if (!blocked) {
+          break;
+        }
+      }
+      bool already = false;
+      for (const double s : slot_starts_) {
+        already = already || std::abs(s - start) < 1e-6;
+      }
+      if (!already) {
+        for (auto &s : slot_starts_) {
+          if (!std::isfinite(s)) {
+            s = start;
+            RCLCPP_INFO(get_node()->get_logger(), "Jump scheduled at t=%.2f s (now %.2f s)",
+                        start, time_since_fade_in);
+            break;
+          }
+        }
+      }
+    }
+    slot_button_prev_ = trigger_pressed;
   }
 
   // If an emergency stop has been triggered, set all commands to 0, set damping, and return
@@ -671,9 +805,27 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       // The shaped (heading-hold) yaw, matching what the observation carries:
       // training computes the reference from the emitted command, so the two
       // must see the same yaw here too.
-      compute_gait_reference_offset(gait_, params_.default_joint_pos, time_since_fade_in,
-                                    cmd_x_vel_, cmd_y_vel_, cmd_yaw_eff,
-                                    observation_.data() + kGaitReferenceIdx);
+      if (use_jump_slot_) {
+        // The active slot, if any: the scheduled start whose active window
+        // covers now. +inf means pure gait -- compute_mixed_jump_reference_offset
+        // checks the window itself, but picking here keeps one slot unambiguous
+        // when a second is already queued.
+        double slot_start = std::numeric_limits<double>::infinity();
+        for (const double s : slot_starts_) {
+          const double t_in = time_since_fade_in - s;
+          if (t_in >= 0.0 && t_in < jump_slot_.active_s) {
+            slot_start = s;
+          }
+        }
+        compute_mixed_jump_reference_offset(gait_, jump_slot_, params_.default_joint_pos,
+                                            time_since_fade_in, cmd_x_vel_, cmd_y_vel_,
+                                            cmd_yaw_eff, slot_start,
+                                            observation_.data() + kGaitReferenceIdx);
+      } else {
+        compute_gait_reference_offset(gait_, params_.default_joint_pos, time_since_fade_in,
+                                      cmd_x_vel_, cmd_y_vel_, cmd_yaw_eff,
+                                      observation_.data() + kGaitReferenceIdx);
+      }
     } else if (use_jump_reference_) {
       // The activation press is a jump request (R2 both switches this
       // controller in and asks for a hop), so the first jump auto-triggers the

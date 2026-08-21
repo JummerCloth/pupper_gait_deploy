@@ -133,6 +133,77 @@ inline void compute_gait_reference_offset(const GaitReference &gait,
 }
 
 /**
+ * Insertable jump slot for MixedGaitsJump policies (mdp/mixed_jump.py).
+ *
+ * Rides on top of a GaitReference: a trigger schedules a slot start on the
+ * grid, and inside the active window the captured jump table plays over
+ * playback_s (phase clamped at 1) with a cross_fade_s linear blend to the
+ * mixed reference at each edge -- zero exactly at the boundaries, so the
+ * composite is continuous by construction. The reference window deliberately
+ * ends before touchdown (active_s < playback landing), stitching the running
+ * gait while the robot is still descending. Transcribes mjlab's
+ * mixed_jump_reference_offset_numpy(); keep the three implementations in step.
+ */
+struct JumpSlot {
+  int n_samples = 0;
+  int n_joints = 0;
+  double playback_s = 0.0;
+  double active_s = 0.0;
+  double cross_fade_s = 0.06;
+  // Trigger starts snap up to this grid (one base gait cycle).
+  double grid_s = 0.75;
+  // A new trigger is queued after, not inside, a window this long.
+  double busy_s = 1.0;
+  // Game-mode controls, tweakable in the JSON without a rebuild.
+  int trigger_button = 0;   // x: jump
+  int run_button = 1;       // circle, held: lift the speed cap
+  double walk_speed_cap = 0.49;
+  double run_speed_cap = 1.5;
+  std::vector<double> jump_table;
+
+  bool valid() const {
+    return n_samples > 0 && n_joints > 0 && playback_s > 0.0 && active_s > 0.0 &&
+           cross_fade_s > 0.0 && grid_s > 0.0 && busy_s >= active_s &&
+           trigger_button >= 0 && run_button >= 0 &&
+           jump_table.size() == static_cast<std::size_t>(n_samples) * n_joints;
+  }
+};
+
+/**
+ * Composite reference: the mixed gaits, overlaid with an active jump slot.
+ *
+ * @param slot_start Seconds (same clock as t) the pending/active slot starts
+ *                   at; pass infinity for none.
+ */
+inline void compute_mixed_jump_reference_offset(
+    const GaitReference &gait, const JumpSlot &slot,
+    const std::vector<double> &default_joint_pos, double t, double vx, double vy,
+    double yaw, double slot_start, float *out) {
+  // Base: the command-driven mixed reference, exactly as without a slot.
+  compute_gait_reference_offset(gait, default_joint_pos, t, vx, vy, yaw, out);
+
+  const double t_in = t - slot_start;
+  if (!(t_in >= 0.0 && t_in < slot.active_s)) {
+    return;
+  }
+  const double phase = std::min(std::max(t_in / slot.playback_s, 0.0), 1.0);
+  const double pos = phase * slot.n_samples;
+  const double pos_floor = std::floor(pos);
+  const int i0 = detail::floor_mod(static_cast<std::int64_t>(pos_floor), slot.n_samples);
+  const int i1 = (i0 + 1) % slot.n_samples;
+  const double alpha = pos - pos_floor;
+  const double fade =
+      std::min(std::max(std::min(t_in, slot.active_s - t_in) / slot.cross_fade_s, 0.0), 1.0);
+
+  for (int j = 0; j < slot.n_joints; j++) {
+    const double lo = slot.jump_table[static_cast<std::size_t>(i0) * slot.n_joints + j];
+    const double hi = slot.jump_table[static_cast<std::size_t>(i1) * slot.n_joints + j];
+    const double jump_off = lo * (1.0 - alpha) + hi * alpha - default_joint_pos[j];
+    out[j] = static_cast<float>(fade * jump_off + (1.0 - fade) * static_cast<double>(out[j]));
+  }
+}
+
+/**
  * One-shot jump reference (mjlab's Pupper "jump" task, mdp/jump.py).
  *
  * Unlike GaitReference this has no blend and no command coupling: the offset is a

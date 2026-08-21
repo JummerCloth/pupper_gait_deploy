@@ -13,6 +13,13 @@ neural_controller:
       description: "Path to the model weights",
     }
 
+  chord_partner:
+    {
+      type: string,
+      default_value: "",
+      description: "Controller to switch to when L1+R1 are pressed together; empty disables the chord",
+    }
+
   use_imu:
     {
       type: bool,

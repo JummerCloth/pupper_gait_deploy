@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -323,6 +324,53 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "FAIL: turning ignored the lift table\n");
       failures++;
     }
+  }
+
+  // MixedGaitsJump fixtures: the jump-slot composite cases.
+  if (j.contains("jump_slot")) {
+    neural_controller::JumpSlot slot;
+    try {
+      neural_controller::parse_jump_slot(j.at("jump_slot"), kActionSize, slot);
+    } catch (const std::exception &e) {
+      std::fprintf(stderr, "FAIL: %s\n", e.what());
+      return 1;
+    }
+    property_checks++;
+    double slot_worst = 0.0;
+    int slot_cases = 0;
+    for (const auto &c : j.at("slot_cases")) {
+      const double t = c.at("t");
+      const std::vector<double> expected = c.at("expected").get<std::vector<double>>();
+      neural_controller::compute_mixed_jump_reference_offset(
+          gait, slot, default_joint_pos, t, c.at("vx"), c.at("vy"), c.at("yaw"),
+          c.at("slot_start"), out.data());
+      double max_err = 0.0;
+      for (int i = 0; i < gait.n_joints; i++) {
+        max_err = std::max(max_err, std::abs(static_cast<double>(out[i]) - expected[i]));
+      }
+      slot_worst = std::max(slot_worst, max_err);
+      slot_cases++;
+      if (max_err > kTolerance) {
+        std::fprintf(stderr, "FAIL slot case t=%.3f: max_abs_err=%.3e\n", t, max_err);
+        failures++;
+      }
+    }
+    // No slot (infinite start) must reproduce the plain mixed reference bit-for-bit.
+    std::vector<float> plain(gait.n_joints), composite(gait.n_joints);
+    neural_controller::compute_gait_reference_offset(gait, default_joint_pos, 2.3, 0.4, 0.0,
+                                                     0.0, plain.data());
+    neural_controller::compute_mixed_jump_reference_offset(
+        gait, slot, default_joint_pos, 2.3, 0.4, 0.0, 0.0,
+        std::numeric_limits<double>::infinity(), composite.data());
+    for (int i = 0; i < gait.n_joints; i++) {
+      if (plain[i] != composite[i]) {
+        std::fprintf(stderr, "FAIL: slot-free composite differs from the mixed reference\n");
+        failures++;
+        break;
+      }
+    }
+    std::printf("jump_slot: %d composite cases matched (worst %.3e)\n", slot_cases,
+                slot_worst);
   }
 
   if (failures > 0) {

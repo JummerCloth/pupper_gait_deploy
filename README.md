@@ -234,6 +234,60 @@ Mind the estop: the trained jump pitches ~20-27 deg nose-up in flight, so
 apex. The shipped `config.yaml` (1.5 rad ~ 86 deg) is fine; the sim policy was
 trained with a 45 deg cutoff, so anything in between also works.
 
+## Game mode (MixedGaitsJump, L1+R1)
+
+`mixed_jump_policy.json` (run `kmhi67tp`, the rough-terrain/DR finetune of the
+mixed-gaits-plus-jump task) carries the usual `gait_reference` block **plus a
+`jump_slot` block**: a captured jump table the controller can splice into the
+mixed reference on a button press, with the velocity command carried straight
+through the jump. It runs in its own controller instance,
+`neural_controller_mixed_jump`.
+
+The controls, "the true game way":
+
+- **L1+R1 (together)** on the default walk controller switches into game mode;
+  **L1+R1 again** switches back out to the walk policy. The chord is detected
+  by the active controller itself (`chord_partner` in `config.yaml`), which
+  asks the `controller_manager` to swap — not by the `estop_controller`.
+- **Left stick** walks. The command is capped at the JSON's `walk_speed_cap`
+  (±0.49 m/s), just under the 0.5 m/s fast-gait onset, so plain stick input
+  can only walk.
+- **Hold circle** to run: the cap rises to `run_speed_cap` (±1.5 m/s) and the
+  fast gaits become reachable. Release and the cap drops back.
+- **X jumps.** A rising edge schedules the jump slot at the next 0.75 s gait
+  grid point (the same `request_jump` arithmetic as training, on the fade-in
+  clock); pressing X again while one is pending or in flight queues the next
+  jump after the busy window (1.0 s) instead of restarting it. The jump keeps
+  whatever velocity is commanded — run in with circle held and it jumps at
+  speed.
+
+Because game mode claims x, circle and L1, those buttons left the
+`estop_controller` single-button switch list. What remains: **triangle =
+parkour, square = test, L2 = default walk (initial bring-up), R2 = one-shot
+jump policy**. After boot everything spawns inactive, so the flow is: press
+**L2** to bring in the walk controller, then **L1+R1** to enter game mode. The
+old three-legged (o) and mimic (L1) modes have no button in this config; the
+mixed-jump policy supersedes the mimic one.
+
+The new C++ (a `JumpSlot` struct, `compute_mixed_jump_reference_offset`, the
+chord service client) builds against `controller_manager_msgs`, which is
+already on the robot as part of ros2_control. Deploying is the usual:
+
+```bash
+# robot
+git pull
+python3 install.py && cd ~/pupperv3-monorepo/ros2_ws && colcon build --packages-select neural_controller
+```
+
+`download_policy.py` routes a JSON with a `jump_slot` block to
+`mixed_jump_policy.json` automatically. To re-export from a newer run:
+
+```bash
+uv run export-pupper-policy Mjlab-MixedGaitsJump-Bumpy-Pupper-v3 \
+    --wandb-run-path mjlab/<run> --output mixed_jump_policy.json \
+    --golden-output mixed_jump_golden.json
+```
+
 ## Tests
 
 `test/gait_golden.json` holds reference offsets generated from the trained mjlab env
@@ -242,8 +296,13 @@ cases. The C++ has to reproduce them:
 
 ```bash
 ./test/run_host_test.sh      # laptop, no ROS or gtest needed
+./test/run_host_test.sh test/mixed_jump_golden.json mixed_jump_policy.json  # game-mode fixture
 colcon test --packages-select neural_controller   # on the robot, as part of the build
 ```
+
+A fixture with a `jump_slot` block additionally checks the composite
+gait+jump-slot reference (`slot_cases`: in-slot, cross-fade edges, and
+slot-free bit-exactness against the plain mixed reference).
 
 This is the check that matters most. The failure it guards against — a truncating
 `%` instead of a floor-modulo when the phase goes negative, which is what a

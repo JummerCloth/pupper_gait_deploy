@@ -70,6 +70,44 @@ inline void parse_gait_reference(const Json &block, int n_joints, GaitReference 
 }
 
 /**
+ * Fill a JumpSlot from the "jump_slot" block of a MixedGaitsJump deploy JSON.
+ */
+template <typename Json>
+inline void parse_jump_slot(const Json &block, int n_joints, JumpSlot &slot) {
+  slot.n_joints = n_joints;
+  slot.n_samples = block.at("n_samples");
+  slot.playback_s = block.at("playback_s");
+  slot.active_s = block.at("active_s");
+  slot.cross_fade_s = block.at("cross_fade_s");
+  slot.grid_s = block.at("grid_s");
+  slot.busy_s = block.at("busy_s");
+  if (block.contains("trigger_button")) slot.trigger_button = block.at("trigger_button");
+  if (block.contains("run_button")) slot.run_button = block.at("run_button");
+  if (block.contains("walk_speed_cap")) slot.walk_speed_cap = block.at("walk_speed_cap");
+  if (block.contains("run_speed_cap")) slot.run_speed_cap = block.at("run_speed_cap");
+
+  const auto &rows = block.at("jump_table");
+  if (static_cast<int>(rows.size()) != slot.n_samples) {
+    throw std::runtime_error("jump_slot table has " + std::to_string(rows.size()) +
+                             " rows, expected n_samples=" + std::to_string(slot.n_samples));
+  }
+  slot.jump_table.clear();
+  slot.jump_table.reserve(static_cast<std::size_t>(slot.n_samples) * n_joints);
+  for (const auto &row : rows) {
+    if (static_cast<int>(row.size()) != n_joints) {
+      throw std::runtime_error("jump_slot row has " + std::to_string(row.size()) +
+                               " entries, expected " + std::to_string(n_joints));
+    }
+    for (const auto &v : row) {
+      slot.jump_table.push_back(v);
+    }
+  }
+  if (!slot.valid()) {
+    throw std::runtime_error("jump_slot block is not self-consistent");
+  }
+}
+
+/**
  * Fill a JumpReference from the "jump_reference" block of a deploy JSON.
  *
  * Same templating rationale as parse_gait_reference above; throws

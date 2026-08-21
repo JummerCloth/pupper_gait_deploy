@@ -74,6 +74,11 @@ def file_mappings(monorepo: Path) -> list[tuple[Path, Path, str]]:
       "Jump parity golden data (generated from the trained env)",
     ),
     (
+      REPO / "test" / "mixed_jump_golden.json",
+      pkg / "test" / "mixed_jump_golden.json",
+      "MixedGaitsJump parity golden data (gait + jump-slot composite cases)",
+    ),
+    (
       REPO / "config.yaml",
       launch / "config.yaml",
       "Controller config (adds neural_controller_mimic)",
@@ -93,6 +98,11 @@ def file_mappings(monorepo: Path) -> list[tuple[Path, Path, str]]:
       launch / "jump_policy.json",
       "One-shot jump policy loaded by neural_controller_jump (R2)",
     ),
+    (
+      REPO / "mixed_jump_policy.json",
+      launch / "mixed_jump_policy.json",
+      "Game-mode policy loaded by neural_controller_mixed_jump (L1+R1)",
+    ),
   ]
 
 
@@ -110,7 +120,12 @@ def install(monorepo: Path, dry_run: bool) -> bool:
     print(f"  destination: {destination}")
 
     if not source.exists():
-      if source.name in ("mimic_policy.json", "jump_policy.json"):
+      if source.name in (
+        "mimic_policy.json",
+        "jump_policy.json",
+        "mixed_jump_policy.json",
+        "mixed_jump_golden.json",
+      ):
         print("  SKIPPED: no policy here yet -- run download_policy.py first")
         continue
       print("  ERROR: source file does not exist")

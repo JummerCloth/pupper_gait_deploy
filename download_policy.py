@@ -139,6 +139,7 @@ def validate(path: Path) -> dict:
   in_dim = policy["in_shape"][1]
   gait = policy.get("gait_reference")
   jump = policy.get("jump_reference")
+  slot = policy.get("jump_slot")
 
   problems = []
   if history is None:
@@ -198,8 +199,27 @@ def validate(path: Path) -> dict:
     if gait.get("joint_names") and gait["joint_names"] != EXPECTED_JOINT_NAMES:
       problems.append("gait_reference joint_names do not match the controller config order")
 
+  # The game-mode jump slot rides on the gait reference; it never stands alone.
+  if slot is not None:
+    if gait is None:
+      problems.append("jump_slot present without a gait_reference block")
+    n = slot.get("n_samples", 0)
+    rows = slot.get("jump_table", [])
+    if len(rows) != n or any(len(r) != ACTION_SIZE for r in rows):
+      problems.append(f"jump_slot table is not {n}x{ACTION_SIZE}")
+    for key in ("playback_s", "active_s", "cross_fade_s", "grid_s", "busy_s"):
+      if key not in slot:
+        problems.append(f"jump_slot missing {key}")
+
   print()
-  kind = "(mimic / motion reference)" if gait else ("(one-shot jump)" if jump else "(plain proprio)")
+  if slot:
+    kind = "(mixed gaits + jump slot / game mode)"
+  elif gait:
+    kind = "(mimic / motion reference)"
+  elif jump:
+    kind = "(one-shot jump)"
+  else:
+    kind = "(plain proprio)"
   print(f"  frame size:          {frame} {kind}")
   print(f"  observation history: {history}  -> input {in_dim}")
   print(f"  kp / kd:             {policy.get('kp')} / {policy.get('kd')}")
@@ -226,6 +246,16 @@ def validate(path: Path) -> dict:
         f"  gallop:              {gait['gallop_freq_mult']}x cadence above |vx| = {gait['gallop_speed']}"
       )
     print(f"  blend speed:         {gait['blend_speed']}")
+  if slot:
+    print(
+      f"  jump slot:           {slot['n_samples']} samples over {slot['playback_s']:.2f} s "
+      f"({slot['active_s']:.2f} s active), grid {slot['grid_s']:.2f} s, busy {slot['busy_s']:.2f} s"
+    )
+    print(
+      f"  game buttons:        jump on {slot.get('trigger_button', 0)} (X), run on "
+      f"{slot.get('run_button', 1)} (circle); caps {slot.get('walk_speed_cap', 0.49)} / "
+      f"{slot.get('run_speed_cap', 1.5)} m/s"
+    )
 
   if problems:
     print("\nPolicy FAILED validation:")
@@ -267,11 +297,15 @@ def main() -> int:
 
   output = args.output
   if output is None:
-    # Route by kind so a jump policy lands in the R2 slot's file rather than
-    # clobbering the mixed-gaits policy that L1 loads.
-    is_jump = "jump_reference" in policy
-    output = REPO / ("jump_policy.json" if is_jump else "mimic_policy.json")
-    print(f"\nPolicy kind: {'jump' if is_jump else 'gait/velocity'} -> {output.name}")
+    # Route by kind so each policy lands in its own controller's file rather
+    # than clobbering another slot's.
+    if "jump_slot" in policy:
+      output, kind = REPO / "mixed_jump_policy.json", "mixed gaits + jump (game mode)"
+    elif "jump_reference" in policy:
+      output, kind = REPO / "jump_policy.json", "jump"
+    else:
+      output, kind = REPO / "mimic_policy.json", "gait/velocity"
+    print(f"\nPolicy kind: {kind} -> {output.name}")
 
   shutil.copy2(downloaded, output)
   print(f"\nWrote {output}")

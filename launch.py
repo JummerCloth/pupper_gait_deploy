@@ -203,6 +203,22 @@ def generate_launch_description():
     )
 
 
+    # MixedGaitsJump game-mode policy (L1+R1 from the walk controller; see
+    # estop_controller comments in config.yaml).
+    mixed_jump_robot_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "neural_controller_mixed_jump",
+            "--controller-manager",
+            "/controller_manager",
+            "--controller-manager-timeout",
+            "30",
+            "--inactive",
+        ],
+    )
+
+
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
@@ -265,6 +281,7 @@ def generate_launch_description():
         test_robot_controller_spawner,
         mimic_robot_controller_spawner,
         jump_robot_controller_spawner,
+        mixed_jump_robot_controller_spawner,
         joint_state_broadcaster_spawner,
         # Comment/uncomment as needed:
         imu_sensor_broadcaster_spawner,

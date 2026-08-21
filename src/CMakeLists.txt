@@ -17,6 +17,10 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+# For the L1+R1 game-mode chord: the controller asks the controller_manager to
+# switch itself out for its chord partner. Always present on the robot, since
+# controller_manager itself depends on it.
+find_package(controller_manager_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(generate_parameter_library REQUIRED)
 
@@ -42,6 +46,7 @@ ament_target_dependencies(
   rclcpp_lifecycle
   geometry_msgs
   sensor_msgs
+  controller_manager_msgs
   tf2
 )
 
@@ -95,6 +100,13 @@ if(BUILD_TESTING)
       add_test(NAME jump_reference_parity COMMAND test_gait_reference
         ${CMAKE_CURRENT_SOURCE_DIR}/test/jump_golden.json
         ${CMAKE_CURRENT_SOURCE_DIR}/launch/jump_policy.json)
+    endif()
+    # Same binary again, mixed-gait+jump fixture: gait cases plus the jump-slot
+    # composite cases.
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/mixed_jump_golden.json)
+      add_test(NAME mixed_jump_reference_parity COMMAND test_gait_reference
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/mixed_jump_golden.json
+        ${CMAKE_CURRENT_SOURCE_DIR}/launch/mixed_jump_policy.json)
     endif()
   endif()
 endif()
