@@ -126,6 +126,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -140,6 +142,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -154,6 +158,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -168,6 +174,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -183,6 +191,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -198,6 +208,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -214,6 +226,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
             "--inactive",
         ],
     )
@@ -228,6 +242,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
         ],
     )
 
@@ -241,6 +257,8 @@ def generate_launch_description():
             "/controller_manager",
             "--controller-manager-timeout",
             "30",
+            "--service-call-timeout",
+            "120",
         ],
     )
 
